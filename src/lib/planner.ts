@@ -15,6 +15,77 @@ import type {
 } from '../types';
 import { clamp, uid } from './format';
 
+const firstKey = <T extends Record<string, unknown>>(record: T, fallback: string) => Object.keys(record)[0] ?? fallback;
+
+const getProgramPreset = (config: PlannerConfig, program: ProgramKey) =>
+  config.programs[program] ?? Object.values(config.programs)[0] ?? {
+    label: 'Custom Program',
+    tuition: 0,
+    ancillary: 0,
+    category: 'Other',
+  };
+
+const getHousingPreset = (config: PlannerConfig, livingSituation: LivingSituation) =>
+  config.housing[livingSituation] ?? Object.values(config.housing)[0] ?? {
+    label: 'Custom Housing',
+    housing: 0,
+    food: 0,
+    utilities: 0,
+    description: 'Custom living cost option.',
+  };
+
+const getMealPlanPreset = (config: PlannerConfig, mealPlan: MealPlanKey) =>
+  config.mealPlans[mealPlan] ?? config.mealPlans.none ?? Object.values(config.mealPlans)[0] ?? {
+    label: 'No Meal Plan',
+    cost: 0,
+    description: 'Use estimated groceries instead.',
+  };
+
+export const normalizePlannerConfig = (partial?: Partial<PlannerConfig>): PlannerConfig => {
+  const programsSource =
+    partial?.programs && Object.keys(partial.programs).length > 0 ? partial.programs : defaultPlannerConfig.programs;
+  const housingSource =
+    partial?.housing && Object.keys(partial.housing).length > 0 ? partial.housing : defaultPlannerConfig.housing;
+  const mealPlansSource =
+    partial?.mealPlans && Object.keys(partial.mealPlans).length > 0 ? partial.mealPlans : defaultPlannerConfig.mealPlans;
+
+  return {
+    programs: Object.fromEntries(
+      Object.entries(programsSource).map(([key, value]) => [
+        key,
+        {
+          label: value.label,
+          tuition: Number(value.tuition || 0),
+          ancillary: Number(value.ancillary || 0),
+          category: value.category || 'Other',
+        },
+      ]),
+    ),
+    housing: Object.fromEntries(
+      Object.entries(housingSource).map(([key, value]) => [
+        key,
+        {
+          label: value.label,
+          housing: Number(value.housing || 0),
+          food: Number(value.food || 0),
+          utilities: Number(value.utilities || 0),
+          description: value.description || 'Custom living cost option.',
+        },
+      ]),
+    ),
+    mealPlans: Object.fromEntries(
+      Object.entries(mealPlansSource).map(([key, value]) => [
+        key,
+        {
+          label: value.label,
+          cost: Number(value.cost || 0),
+          description: value.description || 'Custom meal plan option.',
+        },
+      ]),
+    ),
+  };
+};
+
 const splitMoneyItems = (items: MoneyItem[], term: 'fall' | 'winter') =>
   items.map((item) => {
     const fallAmount = Math.round(item.amount / 2);
@@ -42,16 +113,19 @@ const splitExpenseItems = (items: ExpenseItem[], term: 'fall' | 'winter') =>
 export const createInitialYearBudget = (
   yearNum: number,
   tuitionInflationRate = 3,
-  program: ProgramKey = yearNum === 1 ? 'engineering' : 'healthSci',
+  program: ProgramKey = yearNum === 1 ? 'comprehensiveEngineering' : 'healthSci',
   livingSituation: LivingSituation = yearNum === 1 ? 'on-campus' : 'off-campus',
   config: PlannerConfig = defaultPlannerConfig,
   mealPlan: MealPlanKey = livingSituation === 'on-campus' || livingSituation === 'south-village' ? 'standard' : 'none',
   monthlyGroceries = livingSituation === 'home' ? 250 : 475,
 ): YearBudget => {
   const tuitionMultiplier = Math.pow(1 + tuitionInflationRate / 100, yearNum - 1);
-  const programPreset = config.programs[program];
-  const housingPreset = config.housing[livingSituation];
-  const foodCost = mealPlan === 'none' ? monthlyGroceries * 8 : config.mealPlans[mealPlan].cost;
+  const programKey = config.programs[program] ? program : firstKey(config.programs, 'custom-program');
+  const livingKey = config.housing[livingSituation] ? livingSituation : firstKey(config.housing, 'custom-housing');
+  const mealPlanKey = config.mealPlans[mealPlan] ? mealPlan : config.mealPlans.none ? 'none' : firstKey(config.mealPlans, 'none');
+  const programPreset = getProgramPreset(config, programKey);
+  const housingPreset = getHousingPreset(config, livingKey);
+  const foodCost = mealPlanKey === 'none' ? monthlyGroceries * 8 : getMealPlanPreset(config, mealPlanKey).cost;
 
   const fundingSources: MoneyItem[] = [
     {
@@ -154,9 +228,9 @@ export const createInitialYearBudget = (
 
   return {
     planningMode: 'standard',
-    livingSituation,
-    program,
-    mealPlan,
+    livingSituation: livingKey,
+    program: programKey,
+    mealPlan: mealPlanKey,
     monthlyGroceries,
     fundingSources,
     expenses,
@@ -224,16 +298,20 @@ export const createInitialPlannerState = (): PlannerState => ({
 
 export const hydratePlannerState = (partial: Partial<PlannerState>): PlannerState => {
   const base = createInitialPlannerState();
-  const config: PlannerConfig = {
-    programs: { ...base.config.programs, ...partial.config?.programs },
-    housing: { ...base.config.housing, ...partial.config?.housing },
-    mealPlans: { ...base.config.mealPlans, ...partial.config?.mealPlans },
-  };
+  const config = normalizePlannerConfig(partial.config);
   const yearlyBudgets = { ...base.yearlyBudgets, ...partial.yearlyBudgets };
   Object.entries(yearlyBudgets).forEach(([year, budget]) => {
     yearlyBudgets[Number(year)] = {
       ...budget,
-      mealPlan: budget.mealPlan ?? (budget.livingSituation === 'on-campus' || budget.livingSituation === 'south-village' ? 'standard' : 'none'),
+      program: config.programs[budget.program] ? budget.program : firstKey(config.programs, 'custom-program'),
+      livingSituation: config.housing[budget.livingSituation]
+        ? budget.livingSituation
+        : firstKey(config.housing, 'custom-housing'),
+      mealPlan: config.mealPlans[budget.mealPlan]
+        ? budget.mealPlan
+        : config.mealPlans.none
+          ? 'none'
+          : firstKey(config.mealPlans, 'none'),
       monthlyGroceries: budget.monthlyGroceries ?? (budget.livingSituation === 'home' ? 250 : 475),
     };
   });

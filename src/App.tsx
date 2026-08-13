@@ -35,7 +35,7 @@ import {
   downloadTextFile,
   encodeSharePayload,
 } from './lib/exports';
-import { clamp, formatCAD, parseCurrencyInput, uid } from './lib/format';
+import { clamp, formatCAD, parseCurrencyInput, slugify, uid } from './lib/format';
 import {
   addHousehold,
   calculateDegreeAnalysis,
@@ -84,6 +84,17 @@ const getRoute = (): { route: Route; token?: string } => {
   if (path.startsWith('/app')) return { route: 'app' };
   if (path.startsWith('/share/')) return { route: 'share', token: decodeURIComponent(path.replace('/share/', '')) };
   return { route: 'landing' };
+};
+
+const makeUniqueOptionKey = (label: string, record: Record<string, unknown>) => {
+  const base = slugify(label) || 'option';
+  let key = base;
+  let suffix = 2;
+  while (record[key]) {
+    key = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return key;
 };
 
 const useRouter = () => {
@@ -165,7 +176,7 @@ function BrandedCard({
 }
 
 function LandingPage({ navigate }: { navigate: (path: string) => void }) {
-  const [program, setProgram] = useState<ProgramKey>('engineering');
+  const [program, setProgram] = useState<ProgramKey>('comprehensiveEngineering');
   const [housing, setHousing] = useState<keyof typeof housingPresets>('on-campus');
   const [resp, setResp] = useState(8500);
   const teaserBudget = createInitialYearBudget(1, 3, program, housing);
@@ -1189,6 +1200,72 @@ function AdminTab({
     }));
   };
 
+  const addProgram = () => {
+    setDraft((previous) => {
+      const label = 'New Program';
+      const key = makeUniqueOptionKey(label, previous.programs);
+      return {
+        ...previous,
+        programs: {
+          ...previous.programs,
+          [key]: { label, tuition: 0, ancillary: 0, category: 'Other' },
+        },
+      };
+    });
+  };
+
+  const removeProgram = (key: ProgramKey) => {
+    setDraft((previous) => {
+      if (Object.keys(previous.programs).length <= 1) return previous;
+      const programs = Object.fromEntries(Object.entries(previous.programs).filter(([programKey]) => programKey !== key));
+      return { ...previous, programs };
+    });
+  };
+
+  const addHousing = () => {
+    setDraft((previous) => {
+      const label = 'New Housing Option';
+      const key = makeUniqueOptionKey(label, previous.housing);
+      return {
+        ...previous,
+        housing: {
+          ...previous.housing,
+          [key]: { label, housing: 0, food: 0, utilities: 0, description: 'Custom housing option.' },
+        },
+      };
+    });
+  };
+
+  const removeHousing = (key: LivingSituation) => {
+    setDraft((previous) => {
+      if (Object.keys(previous.housing).length <= 1) return previous;
+      const housing = Object.fromEntries(Object.entries(previous.housing).filter(([housingKey]) => housingKey !== key));
+      return { ...previous, housing };
+    });
+  };
+
+  const addMealPlan = () => {
+    setDraft((previous) => {
+      const label = 'New Meal Plan';
+      const key = makeUniqueOptionKey(label, previous.mealPlans);
+      return {
+        ...previous,
+        mealPlans: {
+          ...previous.mealPlans,
+          [key]: { label, cost: 0, description: 'Custom meal plan option.' },
+        },
+      };
+    });
+  };
+
+  const removeMealPlan = (key: MealPlanKey) => {
+    setDraft((previous) => {
+      if (Object.keys(previous.mealPlans).length <= 1) return previous;
+      const mealPlans = Object.fromEntries(Object.entries(previous.mealPlans).filter(([mealPlanKey]) => mealPlanKey !== key));
+      return { ...previous, mealPlans };
+    });
+  };
+
   const saveConfig = async () => {
     updateState((previous) => ({ ...previous, config: draft }));
     await saveRemotePlannerConfig(draft).catch((error) => {
@@ -1253,15 +1330,22 @@ function AdminTab({
 
       <section className="grid gap-6 lg:grid-cols-2">
         <div className="panel overflow-hidden">
-          <div className="bg-otu-blue p-4 text-white">
+          <div className="flex items-center justify-between gap-3 bg-otu-blue p-4 text-white">
             <h3 className="font-black">Program Tuition & Ancillary Fees</h3>
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-3 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50" onClick={addProgram}>
+              <Plus size={15} /> Add Program
+            </button>
           </div>
           <div className="divide-y divide-slate-200 dark:divide-slate-800">
             {Object.entries(draft.programs).map(([key, value], index) => (
-              <div key={key} className={`grid gap-3 p-4 md:grid-cols-[1fr_140px_140px] ${index % 2 === 1 ? 'bg-blue-50/55 dark:bg-blue-950/20' : 'bg-white dark:bg-slate-900'}`}>
+              <div key={key} className={`grid gap-3 p-4 md:grid-cols-[1fr_170px_120px_120px_auto] md:items-end ${index % 2 === 1 ? 'bg-blue-50/55 dark:bg-blue-950/20' : 'bg-white dark:bg-slate-900'}`}>
                 <label className="text-sm font-bold">
                   Program
                   <input className="field mt-1" value={value.label} onChange={(event) => updateProgram(key as ProgramKey, { label: event.target.value })} />
+                </label>
+                <label className="text-sm font-bold">
+                  Category
+                  <input className="field mt-1" value={value.category} onChange={(event) => updateProgram(key as ProgramKey, { category: event.target.value })} />
                 </label>
                 <label className="text-sm font-bold">
                   Tuition
@@ -1271,18 +1355,30 @@ function AdminTab({
                   Ancillary
                   <input className="field mt-1" type="number" value={value.ancillary} onChange={(event) => updateProgram(key as ProgramKey, { ancillary: parseCurrencyInput(event.target.value) })} />
                 </label>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Remove ${value.label}`}
+                  disabled={Object.keys(draft.programs).length <= 1}
+                  onClick={() => removeProgram(key as ProgramKey)}
+                >
+                  <Trash2 size={16} />
+                </button>
               </div>
             ))}
           </div>
         </div>
 
         <div className="panel overflow-hidden">
-          <div className="bg-otu-orange p-4 text-white">
+          <div className="flex items-center justify-between gap-3 bg-otu-orange p-4 text-white">
             <h3 className="font-black">Residence & Housing Costs</h3>
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-3 py-2 text-sm font-bold text-otu-orange transition hover:bg-orange-50" onClick={addHousing}>
+              <Plus size={15} /> Add Option
+            </button>
           </div>
           <div className="divide-y divide-slate-200 dark:divide-slate-800">
             {Object.entries(draft.housing).map(([key, value], index) => (
-              <div key={key} className={`grid gap-3 p-4 md:grid-cols-[1fr_110px_110px_110px] ${index % 2 === 1 ? 'bg-orange-50/60 dark:bg-orange-950/20' : 'bg-white dark:bg-slate-900'}`}>
+              <div key={key} className={`grid gap-3 p-4 md:grid-cols-[1fr_100px_100px_100px_auto] md:items-end ${index % 2 === 1 ? 'bg-orange-50/60 dark:bg-orange-950/20' : 'bg-white dark:bg-slate-900'}`}>
                 <label className="text-sm font-bold">
                   Option
                   <input className="field mt-1" value={value.label} onChange={(event) => updateHousing(key as LivingSituation, { label: event.target.value })} />
@@ -1299,6 +1395,15 @@ function AdminTab({
                   Utilities
                   <input className="field mt-1" type="number" value={value.utilities} onChange={(event) => updateHousing(key as LivingSituation, { utilities: parseCurrencyInput(event.target.value) })} />
                 </label>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Remove ${value.label}`}
+                  disabled={Object.keys(draft.housing).length <= 1}
+                  onClick={() => removeHousing(key as LivingSituation)}
+                >
+                  <Trash2 size={16} />
+                </button>
               </div>
             ))}
           </div>
@@ -1306,19 +1411,37 @@ function AdminTab({
       </section>
 
       <section className="panel overflow-hidden">
-        <div className="bg-otu-blue p-4 text-white">
+        <div className="flex items-center justify-between gap-3 bg-otu-blue p-4 text-white">
           <h3 className="font-black">Meal Plan Options</h3>
+          <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-3 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50" onClick={addMealPlan}>
+            <Plus size={15} /> Add Meal Plan
+          </button>
         </div>
         <div className="grid gap-3 p-4 md:grid-cols-4">
           {Object.entries(draft.mealPlans).map(([key, value], index) => (
             <div key={key} className={`rounded-lg border border-slate-200 p-3 dark:border-slate-800 ${index % 2 === 1 ? 'bg-blue-50/55 dark:bg-blue-950/20' : 'bg-white dark:bg-slate-900'}`}>
-              <label className="text-sm font-bold">
-                Label
-                <input className="field mt-1" value={value.label} onChange={(event) => updateMealPlan(key as MealPlanKey, { label: event.target.value })} />
-              </label>
+              <div className="flex items-start justify-between gap-2">
+                <label className="min-w-0 flex-1 text-sm font-bold">
+                  Label
+                  <input className="field mt-1" value={value.label} onChange={(event) => updateMealPlan(key as MealPlanKey, { label: event.target.value })} />
+                </label>
+                <button
+                  type="button"
+                  className="icon-button mt-6"
+                  aria-label={`Remove ${value.label}`}
+                  disabled={Object.keys(draft.mealPlans).length <= 1}
+                  onClick={() => removeMealPlan(key as MealPlanKey)}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
               <label className="mt-3 block text-sm font-bold">
                 Cost
                 <input className="field mt-1" type="number" value={value.cost} onChange={(event) => updateMealPlan(key as MealPlanKey, { cost: parseCurrencyInput(event.target.value) })} />
+              </label>
+              <label className="mt-3 block text-sm font-bold">
+                Description
+                <input className="field mt-1" value={value.description} onChange={(event) => updateMealPlan(key as MealPlanKey, { description: event.target.value })} />
               </label>
             </div>
           ))}
@@ -1339,10 +1462,13 @@ function OnboardingWizard({
   onFinish: (state: PlannerState) => void;
   state: PlannerState;
 }) {
+  const initialProgram = Object.keys(config.programs)[0] ?? 'custom-program';
+  const initialLivingSituation = Object.keys(config.housing)[0] ?? 'custom-housing';
+  const initialMealPlan = config.mealPlans.standard ? 'standard' : Object.keys(config.mealPlans)[0] ?? 'none';
   const [step, setStep] = useState(0);
-  const [program, setProgram] = useState<ProgramKey>('engineering');
-  const [livingSituation, setLivingSituation] = useState<LivingSituation>('on-campus');
-  const [mealPlan, setMealPlan] = useState<MealPlanKey>('standard');
+  const [program, setProgram] = useState<ProgramKey>(initialProgram);
+  const [livingSituation, setLivingSituation] = useState<LivingSituation>(initialLivingSituation);
+  const [mealPlan, setMealPlan] = useState<MealPlanKey>(initialMealPlan);
   const [monthlyGroceries, setMonthlyGroceries] = useState(475);
   const [partTimeIncome, setPartTimeIncome] = useState(500);
   const [scholarshipName, setScholarshipName] = useState('Scholarship');
@@ -1351,6 +1477,31 @@ function OnboardingWizard({
   const [respAmount, setRespAmount] = useState(25000);
   const [otherSavings, setOtherSavings] = useState(5000);
   const [householdCount, setHouseholdCount] = useState(2);
+  const [programSearch, setProgramSearch] = useState('');
+  const [programCategory, setProgramCategory] = useState('All');
+
+  const programCategories = useMemo(
+    () => ['All', ...Array.from(new Set(Object.values(config.programs).map((preset) => preset.category || 'Other'))).sort()],
+    [config.programs],
+  );
+
+  const filteredPrograms = useMemo(() => {
+    const normalizedSearch = programSearch.trim().toLowerCase();
+    return Object.entries(config.programs)
+      .filter(([, value]) => programCategory === 'All' || (value.category || 'Other') === programCategory)
+      .filter(([, value]) => {
+        if (!normalizedSearch) return true;
+        return `${value.label} ${value.category}`.toLowerCase().includes(normalizedSearch);
+      })
+      .sort(([, first], [, second]) => first.label.localeCompare(second.label));
+  }, [config.programs, programCategory, programSearch]);
+
+  useEffect(() => {
+    if (!config.programs[program]) setProgram(Object.keys(config.programs)[0] ?? 'custom-program');
+    if (!config.housing[livingSituation]) setLivingSituation(Object.keys(config.housing)[0] ?? 'custom-housing');
+    if (!config.mealPlans[mealPlan]) setMealPlan(config.mealPlans.none ? 'none' : Object.keys(config.mealPlans)[0] ?? 'none');
+    if (!programCategories.includes(programCategory)) setProgramCategory('All');
+  }, [config, livingSituation, mealPlan, program, programCategories, programCategory]);
 
   const finish = () => {
     const firstYear = createInitialYearBudget(1, state.tuitionInflationRate, program, livingSituation, config, mealPlan, monthlyGroceries);
@@ -1392,6 +1543,8 @@ function OnboardingWizard({
   };
 
   const currentPreview = createInitialYearBudget(1, state.tuitionInflationRate, program, livingSituation, config, mealPlan, monthlyGroceries);
+  const selectedProgramPreset = config.programs[currentPreview.program] ?? Object.values(config.programs)[0];
+  const selectedHousingPreset = config.housing[currentPreview.livingSituation] ?? Object.values(config.housing)[0];
   const previewCost = currentPreview.expenses.reduce((sum, expense) => sum + expense.totalAmount, 0);
   const previewFunding = Math.min(respAmount, 8500) + osapAmount + scholarshipAmount + partTimeIncome * 8;
   const previewGap = Math.max(0, previewCost - previewFunding);
@@ -1460,18 +1613,52 @@ function OnboardingWizard({
       subtitle: 'Choose the program first. This sets the tuition and ancillary fee defaults for the first draft.',
       body: (
         <div className="question-card">
-          <h3 className="text-sm font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Program</h3>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            {Object.entries(config.programs).map(([key, value]) => (
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <label className="min-w-0 flex-1 text-sm font-bold">
+              Find a program
+              <input
+                className="field mt-1"
+                placeholder="Search by program or area"
+                value={programSearch}
+                onChange={(event) => setProgramSearch(event.target.value)}
+              />
+            </label>
+            <p className="text-sm font-bold text-slate-500 dark:text-slate-400">
+              {filteredPrograms.length} of {Object.keys(config.programs).length} programs
+            </p>
+          </div>
+          <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+            {programCategories.map((category) => (
+              <button
+                key={category}
+                type="button"
+                className={`shrink-0 rounded-md border px-3 py-2 text-sm font-bold transition ${
+                  programCategory === category
+                    ? 'border-otu-orange bg-otu-orange text-white'
+                    : 'border-slate-200 bg-white text-slate-700 hover:border-otu-sky hover:bg-blue-50 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200'
+                }`}
+                onClick={() => setProgramCategory(category)}
+              >
+                {category}
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 grid max-h-[380px] gap-3 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
+            {filteredPrograms.map(([key, value]) => (
               <OptionCard
                 key={key}
                 active={program === key}
-                description={`${formatCAD(value.tuition)} tuition + ${formatCAD(value.ancillary)} ancillary fees`}
+                description={`${value.category} | ${formatCAD(value.tuition)} tuition + ${formatCAD(value.ancillary)} fees`}
                 label={value.label}
-                onClick={() => setProgram(key as ProgramKey)}
+                onClick={() => setProgram(key)}
               />
             ))}
           </div>
+          {filteredPrograms.length === 0 && (
+            <p className="mt-4 rounded-lg bg-slate-100 p-4 text-sm font-semibold text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+              No programs match that filter. Try another category or search term.
+            </p>
+          )}
         </div>
       ),
     },
@@ -1640,11 +1827,11 @@ function OnboardingWizard({
                 <div className="mt-4 space-y-3">
                   <div>
                     <p className="text-xs font-bold text-slate-500">Program</p>
-                    <p className="font-black">{config.programs[program].label}</p>
+                    <p className="font-black">{selectedProgramPreset?.label ?? 'Custom Program'}</p>
                   </div>
                   <div>
                     <p className="text-xs font-bold text-slate-500">Housing</p>
-                    <p className="font-black">{config.housing[livingSituation].label}</p>
+                    <p className="font-black">{selectedHousingPreset?.label ?? 'Custom Housing'}</p>
                   </div>
                   <div className="grid grid-cols-2 gap-3 rounded-lg bg-slate-100 p-3 dark:bg-slate-800">
                     <div>

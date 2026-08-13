@@ -1,8 +1,8 @@
 export type PlanningMode = 'standard' | 'semester';
 export type Term = 'academic' | 'fall' | 'winter' | 'summer';
-export type LivingSituation = 'on-campus' | 'south-village' | 'off-campus' | 'home';
+export type LivingSituation = string;
 export type AccountType = 'RESP' | 'Savings';
-export type MealPlanKey = 'none' | 'light' | 'standard' | 'full';
+export type MealPlanKey = string;
 
 export interface MoneyItem {
   id: string;
@@ -58,12 +58,13 @@ export interface DeadlineEvent {
   completed: boolean;
 }
 
-export type ProgramKey = 'engineering' | 'computerScience' | 'healthSci' | 'nursing' | 'arts';
+export type ProgramKey = string;
 
 export interface ProgramPreset {
   label: string;
   tuition: number;
   ancillary: number;
+  category: string;
 }
 
 export interface HousingPreset {

@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import type { PlannerConfig, PlannerState, SharePayload } from '../types';
 import { defaultPlannerConfig } from '../data/presets';
+import { normalizePlannerConfig } from './planner';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -125,7 +126,7 @@ export const loadRemotePlannerConfig = async () => {
     .eq('key', 'default')
     .maybeSingle();
   if (error || !data?.config) return defaultPlannerConfig;
-  return data.config as PlannerConfig;
+  return normalizePlannerConfig(data.config as Partial<PlannerConfig>);
 };
 
 export const saveRemotePlannerConfig = async (config: PlannerConfig) => {
