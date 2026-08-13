@@ -1,0 +1,300 @@
+﻿Product Requirements Document (PRD)
+Ontario Tech Student Financial Planner
+Document Version: 1.0.0
+Status: Approved for Development
+Target Release: Q3 2026
+Primary Stack: React / Next.js / Vite, Tailwind CSS, Supabase (Postgres + Auth), Vercel, GitHub Actions
+1. Executive Summary & Vision
+1.1 Executive Summary
+The Ontario Tech Student Financial Planner is a specialized financial planning web application tailored specifically for students at Ontario Tech University (Oshawa, ON) and their families. The application demystifies university expenses, housing costs (Simcoe Village, South Village, off-campus Oshawa rentals), OSAP allocations, RESP drawdowns, and multi-household/co-parent financial responsibility splits.
+1.2 Product Vision
+To empower Ontario Tech students and their families with transparent, stress-free multi-year financial clarity, ensuring no student drops out or experiences unexpected debt due to unforeseen educational expenses.
+2. Target Audience & User Personas
+Persona
+	Role
+	Primary Goal
+	Pain Point
+	Incoming Freshman (Alex)
+	1st Year Engineering Student
+	Estimate total 1st year cost including residence, meal plan, and OSAP aid.
+	Confused by OSAP release timing vs. Ontario Tech SAFA fee deadlines.
+	Co-Parents (Mark & Sarah)
+	Divorced/Separated Parents
+	Transparently split the remaining balance for their student's education.
+	Friction calculating fair splits when RESP draws and OSAP grants are involved.
+	Upper-Year Student (Taylor)
+	3rd Year Health Science
+	Transition from on-campus residence to Oshawa off-campus rent and summer job savings.
+	Difficulty predicting if RESP pools will last through 4th year.
+	3. High-Level Architecture & Tech Stack
++---------------------------------------------------------------------------------+
+|                                 FRONTEND                                        |
+|  React 18 / Next.js (App Router) + Tailwind CSS + Lucide Icons + Recharts      |
++---------------------------------------+-----------------------------------------+
+                                       |
+                                       v
++---------------------------------------------------------------------------------+
+|                                CI/CD & HOSTING                                  |
+|  GitHub Actions (CI Workflows) ---> Preview Deployments / Production on Vercel   |
++---------------------------------------+-----------------------------------------+
+                                       |
+                                       v
++---------------------------------------------------------------------------------+
+|                                 BACKEND (Supabase)                              |
+|  - Supabase Auth (Email / Magic Link / OAuth)                                   |
+|  - Supabase Postgres Database (With Row Level Security)                          |
+|  - Edge Functions (PDF Generation & Email Notifications)                        |
++---------------------------------------------------------------------------------+
+
+4. Detailed Feature & Functional Specifications
+4.1 Landing & Splash Page (Public Marketing Site)
+Before entering the application dashboard, unauthenticated users land on a high-converting, accessible Splash Page.
+* Hero Section: Bold headline ("Master Your Ontario Tech Finances Together"), dynamic call-to-action ("Get Started Free", "Try Sandbox Mode"), and preview screenshots of the budget engine.
+* Feature Highlights Grid:
+   * Ontario Tech Presets: Pre-loaded tuition fees, SAFA fees, Simcoe/South Village residence rates, and Oshawa rental benchmarks.
+   * Multi-Household Splitter: Transparent co-parent financial sharing.
+   * RESP Runway Calculator: Predict exactly when RESP funds will run out.
+* Testimonials & Social Proof: Quotes from Ontario Tech SAFA advisors or peer ambassadors.
+* Interactive Teaser Widget: A quick 3-step cost estimator without requiring an account.
+* Footer: Links to Privacy Policy, Terms of Service, Ontario Tech SAFA official website, and support contacts.
+4.2 Authentication & User Management (Supabase Auth)
+* Authentication Options:
+   * Email & Password Sign-up: With email confirmation requirement.
+   * Magic Link (Passwordless): Secure login link sent directly to user inbox.
+   * Social OAuth (Optional): Google Sign-in integration.
+* User Session Management: Persistent JWT tokens, automatic refresh, and graceful session expiration.
+* Profile Management:
+   * User display name and optional Ontario Tech Student ID reference.
+   * Co-parent invite system (share budgets securely via email invitation).
+* Security Standards: Enforced password complexity, rate-limited login endpoints, CSRF protection.
+4.3 Interactive Financial Planner Engine (Dashboard)
+* Granularity Toggle:
+   * Standard Mode: 8-month academic year planning with summer term extension.
+   * Semester Mode: Fall (Sept-Dec) vs. Winter (Jan-Apr) cash-flow breakdown aligned with Ontario Tech payment deadlines.
+* Smart Presets Engine:
+   * One-click selection for Housing (Simcoe Village, South Village, Off-Campus Oshawa, Living at Home).
+   * Automatic tuition defaults based on program type (Engineering, Computer Science, Health Sci, Nursing, Arts).
+* Dynamic Budget Tables: Add, edit, inline inline-category tagging, drag-to-reorder, and expense replication across academic years.
+* Real-time Shortfall / Surplus Indicator: Color-coded status updates.
+4.4 Household & Co-Parent Contribution Splitter
+* Flexible Household Ratios: Multi-parent contribution sliders summing to 100%.
+* Payment Schedule Breakdown:
+   * Per-Semester lump sums (matching tuition deadlines).
+   * Monthly 8-installment schedules (for off-campus rent and allowance).
+* Sharable Summary Cards: Generate encrypted short links or download clean PDF/CSV summaries for family discussions.
+4.5 Multi-Year Degree Planner & Predictive Analytics
+* 4-Year (or 5-Year Co-op) Projection Engine: Multi-year aggregate total calculation.
+* RESP Pool Exhaustion Modeling: Graph showing annual depletion of RESP EAP and PSE accounts versus remaining personal savings.
+* Tuition Inflation Slider: Dynamic projection modeling (1% to 8% annual tuition hike assumption).
+* Co-op / Summer Term Income Surplus Carryover: Surplus earned in summer terms automatically rolls into Fall semester savings reserves.
+5. Additional Production-Ready Features
+To ensure this app functions as a complete, commercial-grade platform, the following features are integrated into the deployment scope:
+1. PDF & CSV Export Engine:
+   * Download formal, formatted financial summaries suitable for bank loan applications or court-filed child support educational expense documentation.
+2. Real-time Collaboration & Read-Only Sharing:
+   * Students can send a unique view-only or edit link to parents or advisors.
+3. Ontario Tech SAFA Deadlines Tracker & Calendar Sync:
+   * Integrated deadline notifications for OSAP application release, Ontario Tech tuition payment due dates, and SAFA scholarship application windows.
+4. Dark Mode & AODA (Accessibility) Compliance:
+   * Full high-contrast mode, screen reader support (ARIA tags), and keyboard navigation compliance matching Ontario Accessibility standards.
+5. Offline Mode / LocalStorage Fallback:
+   * Allows unregistered guest users to build plans completely offline before opting to save data to a Supabase account.
+6. Database Schema & Security (Supabase / PostgreSQL)
+6.1 Database Schema Diagram & Tables
+-- 1. Profiles Table
+CREATE TABLE public.profiles (
+ id UUID REFERENCES auth.users ON DELETE CASCADE PRIMARY KEY,
+ email TEXT UNIQUE NOT NULL,
+ full_name TEXT,
+ student_program TEXT,
+ expected_graduation_year INT,
+ created_at TIMESTAMPTZ DEFAULT NOW(),
+ updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. Budget Plans Table
+CREATE TABLE public.budget_plans (
+ id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+ user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+ title TEXT NOT NULL DEFAULT 'My Ontario Tech Plan',
+ degree_years_count INT DEFAULT 4,
+ tuition_inflation_rate NUMERIC DEFAULT 3.0,
+ created_at TIMESTAMPTZ DEFAULT NOW(),
+ updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. Savings / RESP Accounts
+CREATE TABLE public.savings_accounts (
+ id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+ plan_id UUID REFERENCES public.budget_plans(id) ON DELETE CASCADE NOT NULL,
+ account_name TEXT NOT NULL,
+ starting_balance NUMERIC NOT NULL DEFAULT 0,
+ account_type TEXT CHECK (account_type IN ('RESP', 'Savings')),
+ created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4. Yearly Budgets Table
+CREATE TABLE public.yearly_budgets (
+ id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+ plan_id UUID REFERENCES public.budget_plans(id) ON DELETE CASCADE NOT NULL,
+ year_number INT NOT NULL,
+ planning_mode TEXT DEFAULT 'standard' CHECK (planning_mode IN ('standard', 'semester')),
+ living_situation TEXT DEFAULT 'off-campus',
+ include_summer BOOLEAN DEFAULT FALSE,
+ created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. Income Items
+CREATE TABLE public.income_items (
+ id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+ yearly_budget_id UUID REFERENCES public.yearly_budgets(id) ON DELETE CASCADE NOT NULL,
+ term TEXT NOT NULL CHECK (term IN ('academic', 'fall', 'winter', 'summer')),
+ name TEXT NOT NULL,
+ amount NUMERIC NOT NULL DEFAULT 0,
+ category TEXT NOT NULL
+);
+
+-- 6. Expense Items
+CREATE TABLE public.expense_items (
+ id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+ yearly_budget_id UUID REFERENCES public.yearly_budgets(id) ON DELETE CASCADE NOT NULL,
+ term TEXT NOT NULL CHECK (term IN ('academic', 'fall', 'winter', 'summer')),
+ name TEXT NOT NULL,
+ total_amount NUMERIC NOT NULL DEFAULT 0,
+ covered_by_others NUMERIC DEFAULT 0,
+ category TEXT NOT NULL
+);
+
+-- 7. Co-Parent / Household Split Ratios
+CREATE TABLE public.household_splits (
+ id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+ plan_id UUID REFERENCES public.budget_plans(id) ON DELETE CASCADE NOT NULL,
+ household_name TEXT NOT NULL,
+ ratio_percent NUMERIC NOT NULL DEFAULT 50
+);
+
+6.2 Supabase Row Level Security (RLS) Policies
+To ensure strict privacy and user isolation:
+-- Enable RLS on all tables
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.budget_plans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.yearly_budgets ENABLE ROW LEVEL SECURITY;
+
+-- Profiles: Users can only read/write their own profile
+CREATE POLICY "Users access own profile" ON public.profiles 
+ FOR ALL USING (auth.uid() = id);
+
+-- Budget Plans: Users access plans they own or are shared with
+CREATE POLICY "Users access own budget plans" ON public.budget_plans 
+ FOR ALL USING (auth.uid() = user_id);
+
+7. CI/CD Pipeline & Vercel Deployment Plan
+7.1 GitHub Actions Workflow (.github/workflows/deploy.yml)
+The deployment process follows a rigid CI/CD pipeline:
+1. Pull Request Trigger: Automated linting, type-checking, and build validation. Generates a dynamic Vercel Preview Deployment.
+2. Main Branch Push: Automated testing suite execution followed by seamless production deployment to Vercel.
+name: CI/CD Pipeline - Ontario Tech Financial Planner
+
+on:
+ push:
+   branches: [ main ]
+ pull_request:
+   branches: [ main ]
+
+jobs:
+ lint-and-test:
+   runs-on: ubuntu-latest
+   steps:
+     - uses: actions/checkout@v4
+     - name: Setup Node.js
+       uses: actions/setup-node@v4
+       with:
+         node-version: 20
+         cache: 'npm'
+     - name: Install dependencies
+       run: npm ci
+     - name: Run Linter
+       run: npm run lint
+     - name: Run Build Check
+       run: npm run build
+
+ deploy-preview:
+   if: github.event_name == 'pull_request'
+   needs: lint-and-test
+   runs-on: ubuntu-latest
+   steps:
+     - uses: actions/checkout@v4
+     - name: Deploy to Vercel Preview
+       uses: amondnet/vercel-action@v25
+       with:
+         vercel-token: ${{ secrets.VERCEL_TOKEN }}
+         vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+         vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+         github-token: ${{ secrets.GITHUB_TOKEN }}
+
+ deploy-production:
+   if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+   needs: lint-and-test
+   runs-on: ubuntu-latest
+   steps:
+     - uses: actions/checkout@v4
+     - name: Deploy to Vercel Production
+       uses: amondnet/vercel-action@v25
+       with:
+         vercel-token: ${{ secrets.VERCEL_TOKEN }}
+         vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+         vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+         vercel-args: '--prod'
+         github-token: ${{ secrets.GITHUB_TOKEN }}
+
+7.2 Environment Variable Matrix
+Variable
+	Description
+	Location
+	VITE_SUPABASE_URL
+	Public API Endpoint for Supabase
+	Vercel Environment Variables & GitHub Secrets
+	VITE_SUPABASE_ANON_KEY
+	Anonymous Public Key for Client Auth & RLS
+	Vercel Environment Variables & GitHub Secrets
+	SUPABASE_SERVICE_ROLE_KEY
+	Backend Administrative Key (Edge Functions only)
+	Supabase & Vercel Serverless Secrets
+	VERCEL_TOKEN
+	Auth token for automated CLI deployments
+	GitHub Repository Secrets
+	8. Implementation Roadmap & Milestones
++---------------------------------------------------------------------------------+
+| PHASE 1: Infrastructure & Auth (Weeks 1-2)                                      |
+| - Repository initialization, Vercel & GitHub Actions CI pipeline setup           |
+| - Supabase project config, database migrations & RLS setup                      |
+| - Authentication pages (Login, Sign-Up, Reset Password, Magic Link)              |
++---------------------------------------------------------------------------------+
+                                       |
+                                       v
++---------------------------------------------------------------------------------+
+| PHASE 2: Core App Migration & Database Persistence (Weeks 3-4)                  |
+| - Migrate existing React single-file state to Supabase hooks / Zustand          |
+| - Real-time sync for standard/semester budget modes, RESP pool, & splitters     |
+| - Preset database seed for Ontario Tech 2026/2027 tuition & housing fees         |
++---------------------------------------------------------------------------------+
+                                       |
+                                       v
++---------------------------------------------------------------------------------+
+| PHASE 3: Splash Page & Marketing Funnel (Week 5)                                |
+| - High-converting splash page with interactive preview widget                    |
+| - Responsive optimization and dark mode implementation                           |
++---------------------------------------------------------------------------------+
+                                       |
+                                       v
++---------------------------------------------------------------------------------+
+| PHASE 4: Export Tools & Share Links (Week 6)                                    |
+| - PDF/CSV export engine implementation                                           |
+| - Secure tokenized shareable URLs for co-parents and advisors                   |
+| - Final QA, AODA accessibility testing, and Production Launch                   |
++---------------------------------------------------------------------------------+
+
+9. Compliance, Privacy & Security
+* FIPPA / PIPEDA Compliance: No sensitive financial account numbers stored. All financial records strictly tied to user-created pseudonymous accounts.
+* AODA (Accessibility for Ontarians with Disabilities Act): Meets WCAG 2.1 Level AA compliance standards.
+* Data Backups: Automated daily snapshots managed via Supabase Point-in-Time Recovery (PITR).
