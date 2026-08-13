@@ -1,5 +1,5 @@
 import type { PlannerState, SharePayload } from '../types';
-import { createInitialPlannerState } from './planner';
+import { createInitialPlannerState, hydratePlannerState } from './planner';
 
 export const PLAN_STORAGE_KEY = 'otu-financial-planner-plan';
 export const SHARE_STORAGE_PREFIX = 'otu-financial-planner-share-';
@@ -10,7 +10,7 @@ export const loadLocalPlan = (): PlannerState => {
   if (!raw) return createInitialPlannerState();
   try {
     const parsed = JSON.parse(raw) as PlannerState;
-    return { ...createInitialPlannerState(), ...parsed };
+    return hydratePlannerState(parsed);
   } catch {
     return createInitialPlannerState();
   }

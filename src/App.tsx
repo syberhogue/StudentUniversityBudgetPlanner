@@ -15,7 +15,9 @@ import {
   Save,
   Share2,
   Shield,
+  Settings,
   SlidersHorizontal,
+  Sparkles,
   Sun,
   Trash2,
   Users,
@@ -23,7 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { expenseCategories, housingPresets, incomeCategories, programPresets } from './data/presets';
+import { defaultPlannerConfig, expenseCategories, housingPresets, incomeCategories, programPresets } from './data/presets';
 import {
   createDeadlineIcs,
   createPlannerCsv,
@@ -48,19 +50,33 @@ import {
 import { loadLocalPlan, loadLocalShare, saveLocalPlan, saveLocalShare } from './lib/storage';
 import {
   createRemoteShare,
+  getCurrentUserIsAdmin,
   isSupabaseConfigured,
+  loadRemotePlannerConfig,
   loadRemoteShare,
   saveRemotePlanSnapshot,
+  saveRemotePlannerConfig,
   sendMagicLink,
   signInWithPassword,
   signOut,
   signUpWithPassword,
   supabase,
 } from './lib/supabase';
-import type { DeadlineEvent, ExpenseItem, MoneyItem, PlannerState, ProgramKey, Term, YearBudget } from './types';
+import type {
+  DeadlineEvent,
+  ExpenseItem,
+  LivingSituation,
+  MealPlanKey,
+  MoneyItem,
+  PlannerConfig,
+  PlannerState,
+  ProgramKey,
+  Term,
+  YearBudget,
+} from './types';
 
 type Route = 'landing' | 'auth' | 'app' | 'share';
-type DashboardTab = 'budget' | 'split' | 'degree' | 'deadlines';
+type DashboardTab = 'budget' | 'split' | 'degree' | 'deadlines' | 'admin';
 
 const getRoute = (): { route: Route; token?: string } => {
   const path = window.location.pathname;
@@ -122,6 +138,31 @@ const NavButton = ({
     {children}
   </button>
 );
+
+function BrandedCard({
+  children,
+  icon,
+  title,
+  tone,
+}: {
+  children: React.ReactNode;
+  icon: React.ReactNode;
+  title: string;
+  tone: 'blue' | 'orange';
+}) {
+  const headerClass = tone === 'blue' ? 'bg-otu-blue text-white' : 'bg-otu-orange text-white';
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft dark:border-slate-800 dark:bg-slate-900">
+      <div className={`flex w-full items-center justify-between gap-3 p-4 text-left ${headerClass}`}>
+        <span className="flex items-center gap-2 text-sm font-black">
+          {icon} {title}
+        </span>
+      </div>
+      <div className="p-4">{children}</div>
+    </div>
+  );
+}
 
 function LandingPage({ navigate }: { navigate: (path: string) => void }) {
   const [program, setProgram] = useState<ProgramKey>('engineering');
@@ -354,7 +395,13 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
   const [darkMode, setDarkMode] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
   const [saved, setSaved] = useState(false);
   const [shareUrl, setShareUrl] = useState('');
-  const budget = state.yearlyBudgets[state.selectedYear] ?? createInitialYearBudget(state.selectedYear, state.tuitionInflationRate);
+  const [showActionsMenu, setShowActionsMenu] = useState(false);
+  const [showWizard, setShowWizard] = useState(() => !loadLocalPlan().wizardCompleted);
+  const [commandCenterCollapsed, setCommandCenterCollapsed] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(!isSupabaseConfigured);
+  const budget =
+    state.yearlyBudgets[state.selectedYear] ??
+    createInitialYearBudget(state.selectedYear, state.tuitionInflationRate, 'healthSci', 'off-campus', state.config);
   const activeTerm = budget.planningMode === 'standard' && (state.activeTerm === 'fall' || state.activeTerm === 'winter') ? 'academic' : state.activeTerm;
   const lists = getBudgetLists(budget, activeTerm);
   const totals = useMemo(() => calculateTermTotals(budget, activeTerm), [budget, activeTerm]);
@@ -370,13 +417,24 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
     return () => window.clearTimeout(timer);
   }, [state]);
 
+  useEffect(() => {
+    if (isSupabaseConfigured) {
+      void loadRemotePlannerConfig().then((config) => {
+        setState((previous) => ({ ...previous, config }));
+      });
+    }
+    void getCurrentUserIsAdmin().then(setIsAdmin);
+  }, []);
+
   const updateState = (updater: (previous: PlannerState) => PlannerState) => {
     setState((previous) => ({ ...updater(previous), updatedAt: new Date().toISOString() }));
   };
 
   const updateBudget = (year: number, updater: (budget: YearBudget) => YearBudget) => {
     updateState((previous) => {
-      const current = previous.yearlyBudgets[year] ?? createInitialYearBudget(year, previous.tuitionInflationRate);
+      const current =
+        previous.yearlyBudgets[year] ??
+        createInitialYearBudget(year, previous.tuitionInflationRate, 'healthSci', 'off-campus', previous.config);
       return {
         ...previous,
         yearlyBudgets: { ...previous.yearlyBudgets, [year]: updater(current) },
@@ -388,11 +446,11 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
     updateState((previous) => ({ ...previous, activeTerm: term }));
   };
 
-  const applyPreset = (program: ProgramKey, livingSituation: keyof typeof housingPresets) => {
+  const applyPreset = (program: ProgramKey, livingSituation: LivingSituation, mealPlan = budget.mealPlan, monthlyGroceries = budget.monthlyGroceries) => {
     updateBudget(state.selectedYear, (current) => ({
-      ...createInitialYearBudget(state.selectedYear, state.tuitionInflationRate, program, livingSituation),
+      ...createInitialYearBudget(state.selectedYear, state.tuitionInflationRate, program, livingSituation, state.config, mealPlan, monthlyGroceries),
       planningMode: current.planningMode,
-      includeSummer: current.includeSummer,
+      includeSummer: true,
     }));
   };
 
@@ -436,7 +494,9 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
     const encoded = encodeSharePayload(payload);
     saveLocalShare(token, state);
     await createRemoteShare(state, token, payload).catch(() => undefined);
-    setShareUrl(`${window.location.origin}/share/${encodeURIComponent(token)}#${encoded}`);
+    const url = `${window.location.origin}/share/${encodeURIComponent(token)}#${encoded}`;
+    setShareUrl(url);
+    await navigator.clipboard.writeText(url).catch(() => undefined);
   };
 
   const saveNow = async () => {
@@ -488,6 +548,11 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
             <NavButton active={tab === 'deadlines'} onClick={() => setTab('deadlines')}>
               <CalendarDays size={16} /> Deadlines
             </NavButton>
+            {isAdmin && (
+              <NavButton active={tab === 'admin'} onClick={() => setTab('admin')}>
+                <Settings size={16} /> Admin
+              </NavButton>
+            )}
           </nav>
           <div className="flex items-center gap-2">
             <button type="button" className="icon-button" aria-label="Toggle dark mode" onClick={() => setDarkMode((value) => !value)}>
@@ -504,63 +569,170 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-6">
-        <section className="mb-6 grid gap-4 lg:grid-cols-[1fr_auto]">
-          <div className="panel p-4">
-            <div className="grid gap-3 md:grid-cols-4">
-              <label className="text-sm font-bold">
-                Plan title
-                <input className="field mt-1" value={state.title} onChange={(event) => updateState((previous) => ({ ...previous, title: event.target.value }))} />
-              </label>
-              <label className="text-sm font-bold">
-                Student
-                <input className="field mt-1" value={state.studentName} onChange={(event) => updateState((previous) => ({ ...previous, studentName: event.target.value }))} />
-              </label>
-              <label className="text-sm font-bold">
-                Inflation
-                <input
-                  className="field mt-1"
-                  type="number"
-                  min={1}
-                  max={8}
-                  value={state.tuitionInflationRate}
-                  onChange={(event) =>
-                    updateState((previous) => ({ ...previous, tuitionInflationRate: clamp(parseCurrencyInput(event.target.value), 1, 8) }))
-                  }
-                />
-              </label>
-              <label className="text-sm font-bold">
-                Degree years
-                <input
-                  className="field mt-1"
-                  type="number"
-                  min={1}
-                  max={5}
-                  value={state.degreeYearsCount}
-                  onChange={(event) => {
-                    const count = clamp(parseCurrencyInput(event.target.value), 1, 5);
-                    updateState((previous) => {
-                      const yearlyBudgets = { ...previous.yearlyBudgets };
-                      for (let year = 1; year <= count; year += 1) {
-                        yearlyBudgets[year] ??= createInitialYearBudget(year, previous.tuitionInflationRate);
-                      }
-                      return { ...previous, degreeYearsCount: count, selectedYear: Math.min(previous.selectedYear, count), yearlyBudgets };
-                    });
-                  }}
-                />
-              </label>
-            </div>
+        <section className="brand-shell mb-6">
+          <div className="flex w-full items-center justify-between gap-4 bg-otu-blue p-4 text-left text-white">
+            <span className="flex min-w-0 items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-otu-orange text-white shadow-sm">
+                <GraduationCap size={22} />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-xs font-black uppercase tracking-[0.2em] text-otu-sky">Planner Command Center</span>
+                <span className="block truncate text-xl font-black">{state.title || 'Ontario Tech Plan'}</span>
+              </span>
+            </span>
+            <span className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50"
+                onClick={() => setShowWizard(true)}
+              >
+                <SlidersHorizontal size={16} /> Wizard
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-white/20 bg-white/10 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition hover:bg-white/20"
+                onClick={() => setCommandCenterCollapsed((value) => !value)}
+              >
+                {commandCenterCollapsed ? 'Expand' : 'Minimize'}
+              </button>
+            </span>
           </div>
-          <div className="panel flex flex-wrap items-center gap-2 p-4">
-            <button type="button" className="secondary-button" onClick={exportCsv}>
-              <Download size={16} /> CSV
-            </button>
-            <button type="button" className="secondary-button" onClick={printSummary}>
-              <Printer size={16} /> PDF
-            </button>
-            <button type="button" className="secondary-button" onClick={createShare}>
-              <Share2 size={16} /> Share
-            </button>
-          </div>
+
+          {!commandCenterCollapsed && (
+            <>
+              <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-end lg:justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <label className="text-sm font-bold">
+                      Plan title
+                      <input className="field mt-1" value={state.title} onChange={(event) => updateState((previous) => ({ ...previous, title: event.target.value }))} />
+                    </label>
+                    <label className="text-sm font-bold">
+                      Student
+                      <input className="field mt-1" value={state.studentName} onChange={(event) => updateState((previous) => ({ ...previous, studentName: event.target.value }))} />
+                    </label>
+                    <label className="text-sm font-bold">
+                      Inflation
+                      <input
+                        className="field mt-1"
+                        type="number"
+                        min={1}
+                        max={8}
+                        value={state.tuitionInflationRate}
+                        onChange={(event) =>
+                          updateState((previous) => ({ ...previous, tuitionInflationRate: clamp(parseCurrencyInput(event.target.value), 1, 8) }))
+                        }
+                      />
+                    </label>
+                    <label className="text-sm font-bold">
+                      Degree years
+                      <input
+                        className="field mt-1"
+                        type="number"
+                        min={1}
+                        max={5}
+                        value={state.degreeYearsCount}
+                        onChange={(event) => {
+                          const count = clamp(parseCurrencyInput(event.target.value), 1, 5);
+                          updateState((previous) => {
+                            const yearlyBudgets = { ...previous.yearlyBudgets };
+                            for (let year = 1; year <= count; year += 1) {
+                              yearlyBudgets[year] ??= createInitialYearBudget(year, previous.tuitionInflationRate, 'healthSci', 'off-campus', previous.config);
+                            }
+                            return { ...previous, degreeYearsCount: count, selectedYear: Math.min(previous.selectedYear, count), yearlyBudgets };
+                          });
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
+                <div className="relative flex shrink-0 flex-wrap items-center gap-2">
+                  <button type="button" className="primary-button" onClick={() => setShowActionsMenu((value) => !value)}>
+                    <Share2 size={16} /> Share
+                  </button>
+                  {showActionsMenu && (
+                    <div className="absolute right-0 top-12 z-20 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+                      <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-800" onClick={() => { exportCsv(); setShowActionsMenu(false); }}>
+                        <Download size={16} /> Export CSV
+                      </button>
+                      <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-800" onClick={() => { printSummary(); setShowActionsMenu(false); }}>
+                        <Printer size={16} /> Print / PDF
+                      </button>
+                      <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-800" onClick={() => { void createShare(); setShowActionsMenu(false); }}>
+                        <Share2 size={16} /> Copy Share Link
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              {tab === 'budget' && (
+                <div className="grid gap-4 border-t border-slate-200 p-4 dark:border-slate-800 lg:grid-cols-[0.9fr_1.1fr]">
+                  <BrandedCard icon={<GraduationCap size={18} />} tone="blue" title="Academic Setup">
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <label className="text-sm font-bold">
+                        Year
+                        <select
+                          className="field mt-1"
+                          value={state.selectedYear}
+                          onChange={(event) => updateState((previous) => ({ ...previous, selectedYear: parseCurrencyInput(event.target.value), activeTerm: 'academic' }))}
+                        >
+                          {Array.from({ length: state.degreeYearsCount }, (_, index) => index + 1).map((year) => (
+                            <option key={year} value={year}>
+                              Year {year}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-sm font-bold sm:col-span-2">
+                        Program
+                        <select className="field mt-1" value={budget.program} onChange={(event) => applyPreset(event.target.value as ProgramKey, budget.livingSituation)}>
+                          {Object.entries(state.config.programs).map(([key, value]) => (
+                            <option key={key} value={key}>
+                              {value.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  </BrandedCard>
+
+                  <BrandedCard icon={<Home size={18} />} tone="orange" title="Living Situation">
+                    <div className="grid gap-3 md:grid-cols-[1fr_1fr_130px]">
+                      <label className="text-sm font-bold">
+                        Housing
+                        <select className="field mt-1" value={budget.livingSituation} onChange={(event) => applyPreset(budget.program, event.target.value as LivingSituation)}>
+                          {Object.entries(state.config.housing).map(([key, value]) => (
+                            <option key={key} value={key}>
+                              {value.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-sm font-bold">
+                        Meal plan
+                        <select className="field mt-1" value={budget.mealPlan} onChange={(event) => applyPreset(budget.program, budget.livingSituation, event.target.value as MealPlanKey)}>
+                          {Object.entries(state.config.mealPlans).map(([key, value]) => (
+                            <option key={key} value={key}>
+                              {value.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-sm font-bold">
+                        Groceries/mo
+                        <input
+                          className="field mt-1"
+                          type="number"
+                          value={budget.monthlyGroceries}
+                          onChange={(event) => applyPreset(budget.program, budget.livingSituation, budget.mealPlan, parseCurrencyInput(event.target.value))}
+                        />
+                      </label>
+                    </div>
+                  </BrandedCard>
+                </div>
+              )}
+            </>
+          )}
         </section>
 
         {shareUrl && (
@@ -576,15 +748,13 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
 
         {tab === 'budget' && (
           <BudgetTab
-            state={state}
-            budget={budget}
             activeTerm={activeTerm}
+            budget={budget}
             lists={lists}
             totals={totals}
+            selectedYear={state.selectedYear}
             setTerm={setTerm}
             updateBudget={updateBudget}
-            updateState={updateState}
-            applyPreset={applyPreset}
             addItem={addItem}
             updateItem={updateItem}
             removeItem={removeItem}
@@ -593,116 +763,84 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
         {tab === 'split' && <SplitterTab state={state} totals={totals} updateState={updateState} />}
         {tab === 'degree' && <DegreeTab state={state} degree={degree} updateState={updateState} />}
         {tab === 'deadlines' && <DeadlinesTab state={state} updateState={updateState} exportCalendar={exportCalendar} />}
+        {tab === 'admin' && isAdmin && <AdminTab state={state} updateState={updateState} setTab={setTab} />}
       </main>
+      {showWizard && (
+        <OnboardingWizard
+          config={state.config}
+          onClose={() => setShowWizard(false)}
+          onFinish={(nextState) => {
+            setState(nextState);
+            setShowWizard(false);
+            setTab('budget');
+          }}
+          state={state}
+        />
+      )}
     </div>
   );
 }
 
 function BudgetTab({
-  state,
-  budget,
   activeTerm,
+  budget,
   lists,
   totals,
+  selectedYear,
   setTerm,
   updateBudget,
-  updateState,
-  applyPreset,
   addItem,
   updateItem,
   removeItem,
 }: {
-  state: PlannerState;
-  budget: YearBudget;
   activeTerm: Term;
+  budget: YearBudget;
   lists: { funding: MoneyItem[]; expenses: ExpenseItem[] };
   totals: ReturnType<typeof calculateTermTotals>;
+  selectedYear: number;
   setTerm: (term: Term) => void;
   updateBudget: (year: number, updater: (budget: YearBudget) => YearBudget) => void;
-  updateState: (updater: (previous: PlannerState) => PlannerState) => void;
-  applyPreset: (program: ProgramKey, livingSituation: keyof typeof housingPresets) => void;
   addItem: (type: 'funding' | 'expense') => void;
   updateItem: (type: 'funding' | 'expense', id: string, patch: Partial<MoneyItem & ExpenseItem>) => void;
   removeItem: (type: 'funding' | 'expense', id: string) => void;
 }) {
   return (
     <div className="space-y-6">
-      <section className="panel p-4">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div className="grid flex-1 gap-3 md:grid-cols-4">
-            <label className="text-sm font-bold">
-              Year
-              <select
-                className="field mt-1"
-                value={state.selectedYear}
-                onChange={(event) => updateState((previous) => ({ ...previous, selectedYear: parseCurrencyInput(event.target.value), activeTerm: 'academic' }))}
-              >
-                {Array.from({ length: state.degreeYearsCount }, (_, index) => index + 1).map((year) => (
-                  <option key={year} value={year}>
-                    Year {year}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-sm font-bold">
-              Program
-              <select className="field mt-1" value={budget.program} onChange={(event) => applyPreset(event.target.value as ProgramKey, budget.livingSituation)}>
-                {Object.entries(programPresets).map(([key, value]) => (
-                  <option key={key} value={key}>
-                    {value.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-sm font-bold">
-              Housing
-              <select className="field mt-1" value={budget.livingSituation} onChange={(event) => applyPreset(budget.program, event.target.value as keyof typeof housingPresets)}>
-                {Object.entries(housingPresets).map(([key, value]) => (
-                  <option key={key} value={key}>
-                    {value.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-sm font-bold">
-              Granularity
-              <select
-                className="field mt-1"
-                value={budget.planningMode}
-                onChange={(event) => {
-                  const planningMode = event.target.value as YearBudget['planningMode'];
-                  updateBudget(state.selectedYear, (current) => ({ ...current, planningMode }));
-                  setTerm(planningMode === 'semester' ? 'fall' : 'academic');
-                }}
-              >
-                <option value="standard">Standard 8-month</option>
-                <option value="semester">Fall / Winter</option>
-              </select>
-            </label>
-          </div>
-          <button type="button" className="secondary-button" onClick={() => updateBudget(state.selectedYear, (current) => ({ ...current, includeSummer: !current.includeSummer }))}>
-            <Sun size={16} /> Summer {budget.includeSummer ? 'On' : 'Off'}
-          </button>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {(budget.planningMode === 'semester' ? (['fall', 'winter'] as Term[]) : (['academic'] as Term[])).map((term) => (
-            <button key={term} type="button" className={activeTerm === term ? 'primary-button' : 'secondary-button'} onClick={() => setTerm(term)}>
-              {term === 'academic' ? 'Academic' : term[0].toUpperCase() + term.slice(1)}
-            </button>
-          ))}
-          {budget.includeSummer && (
-            <button type="button" className={activeTerm === 'summer' ? 'primary-button' : 'secondary-button'} onClick={() => setTerm('summer')}>
-              Summer
-            </button>
-          )}
-        </div>
-      </section>
-
       <section className="grid gap-4 md:grid-cols-4">
         <Stat label="Term Net" value={formatCAD(Math.abs(totals.totalFunding - totals.myShareExpenses))} tone={totals.myShareExpenses > totals.totalFunding ? 'red' : 'green'} />
         <Stat label="Aid & Income" value={formatCAD(totals.totalFunding)} tone="green" />
         <Stat label="My Expenses" value={formatCAD(totals.myShareExpenses)} tone="orange" />
         <Stat label="Parent Gap" value={formatCAD(totals.netStudentDeficit)} tone="red" />
+      </section>
+
+      <section className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-soft dark:border-slate-800 dark:bg-slate-900 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Budget Period</p>
+          <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">Select which period the income and expenses below should edit.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {[
+            { label: 'Academic Year (8 mo)', term: 'academic' as Term, mode: 'standard' as YearBudget['planningMode'] },
+            { label: 'Fall', term: 'fall' as Term, mode: 'semester' as YearBudget['planningMode'] },
+            { label: 'Winter', term: 'winter' as Term, mode: 'semester' as YearBudget['planningMode'] },
+            { label: 'Summer', term: 'summer' as Term, mode: budget.planningMode },
+          ].map((option) => (
+            <button
+              key={option.term}
+              type="button"
+              className={activeTerm === option.term ? 'primary-button' : 'secondary-button'}
+              onClick={() => {
+                if (option.term !== 'summer') {
+                  updateBudget(selectedYear, (current) => ({ ...current, planningMode: option.mode }));
+                }
+                setTerm(option.term);
+              }}
+            >
+              {option.term === 'summer' && <Sun size={16} />}
+              {option.label}
+            </button>
+          ))}
+        </div>
       </section>
 
       <section className="grid gap-6 lg:grid-cols-2">
@@ -750,21 +888,36 @@ function EditableTable({
   updateItem: (type: 'funding' | 'expense', id: string, patch: Partial<MoneyItem & ExpenseItem>) => void;
   removeItem: (type: 'funding' | 'expense', id: string) => void;
 }) {
+  const brandedHeader =
+    type === 'funding'
+      ? 'border-otu-blue bg-otu-blue text-white'
+      : 'border-otu-orange bg-otu-orange text-white';
+  const addButtonClass =
+    type === 'funding'
+      ? 'inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50'
+      : 'inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-orange transition hover:bg-orange-50';
+
   return (
     <div className="panel overflow-hidden">
-      <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900">
+      <div className={`flex items-center justify-between border-b p-4 ${brandedHeader}`}>
         <h2 className="flex items-center gap-2 text-sm font-black">
           {icon} {title}
         </h2>
-        <button type="button" className="secondary-button" onClick={() => addItem(type)}>
+        <button type="button" className={addButtonClass} onClick={() => addItem(type)}>
           <Plus size={16} /> Add
         </button>
       </div>
       <div className="divide-y divide-slate-200 dark:divide-slate-800">
-        {items.map((item) => {
+        {items.map((item, index) => {
           const expense = 'totalAmount' in item;
+          const rowShade =
+            index % 2 === 1
+              ? type === 'funding'
+                ? 'bg-blue-50/55 dark:bg-blue-950/20'
+                : 'bg-orange-50/60 dark:bg-orange-950/20'
+              : 'bg-white dark:bg-slate-900';
           return (
-            <div key={item.id} className="grid gap-3 p-4 md:grid-cols-[1fr_130px_130px_40px] md:items-center">
+            <div key={item.id} className={`grid gap-3 p-4 md:grid-cols-[1fr_130px_130px_40px] md:items-center ${rowShade}`}>
               <input className="field" value={item.name} onChange={(event) => updateItem(type, item.id, { name: event.target.value })} />
               <select className="field" value={item.category} onChange={(event) => updateItem(type, item.id, { category: event.target.value })}>
                 {categories.map((category) => (
@@ -803,18 +956,18 @@ function SplitterTab({
 }) {
   return (
     <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
-      <section className="panel p-5">
-        <div className="flex items-center justify-between">
+      <section className="panel overflow-hidden">
+        <div className="flex items-center justify-between bg-otu-blue p-4 text-white">
           <h2 className="flex items-center gap-2 text-lg font-black">
-            <SlidersHorizontal className="text-otu-orange" /> Household Ratios
+            <SlidersHorizontal /> Household Ratios
           </h2>
-          <button type="button" className="secondary-button" onClick={() => updateState((previous) => ({ ...previous, households: addHousehold(previous.households) }))}>
+          <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50" onClick={() => updateState((previous) => ({ ...previous, households: addHousehold(previous.households) }))}>
             <Plus size={16} /> Add
           </button>
         </div>
-        <div className="mt-5 space-y-4">
-          {state.households.map((household) => (
-            <div key={household.id} className="rounded-lg border border-slate-200 p-4 dark:border-slate-800">
+        <div className="space-y-4 p-5">
+          {state.households.map((household, index) => (
+            <div key={household.id} className={`rounded-lg border border-slate-200 p-4 dark:border-slate-800 ${index % 2 === 1 ? 'bg-blue-50/55 dark:bg-blue-950/20' : 'bg-white dark:bg-slate-900'}`}>
               <div className="flex items-center gap-3">
                 <input
                   className="field"
@@ -855,13 +1008,15 @@ function SplitterTab({
         </div>
       </section>
 
-      <section className="panel p-5">
-        <h2 className="text-lg font-black">Payment Schedule</h2>
-        <div className="mt-4 grid gap-3">
-          {state.households.map((household) => {
+      <section className="panel overflow-hidden">
+        <div className="bg-otu-orange p-4 text-white">
+          <h2 className="text-lg font-black">Payment Schedule</h2>
+        </div>
+        <div className="grid gap-3 p-5">
+          {state.households.map((household, index) => {
             const share = totals.netStudentDeficit * (household.ratio / 100);
             return (
-              <div key={household.id} className="rounded-lg border border-slate-200 p-4 dark:border-slate-800">
+              <div key={household.id} className={`rounded-lg border border-slate-200 p-4 dark:border-slate-800 ${index % 2 === 1 ? 'bg-orange-50/60 dark:bg-orange-950/20' : 'bg-white dark:bg-slate-900'}`}>
                 <div className="flex items-center justify-between">
                   <h3 className="font-black">{household.name}</h3>
                   <span className="font-black text-otu-orange">{formatCAD(share)}</span>
@@ -898,17 +1053,17 @@ function DegreeTab({
         <Stat label="Parent Gap" value={formatCAD(degree.grandTotalParentSupportNeeded)} tone="red" />
       </section>
       <section className="panel overflow-hidden">
-        <div className="border-b border-slate-200 p-4 dark:border-slate-800">
+        <div className="bg-otu-blue p-4 text-white">
           <h2 className="text-lg font-black">RESP & Savings Runway</h2>
         </div>
         <div className="divide-y divide-slate-200 dark:divide-slate-800">
-          {degree.yearlyBreakdowns.map((year) => (
+          {degree.yearlyBreakdowns.map((year, index) => (
             <button
               key={year.yearNum}
               type="button"
               onClick={() => updateState((previous) => ({ ...previous, selectedYear: year.yearNum }))}
               className={`grid w-full gap-4 p-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-800 md:grid-cols-[90px_1fr_1fr_1fr] ${
-                state.selectedYear === year.yearNum ? 'bg-blue-50 dark:bg-blue-950/40' : ''
+                state.selectedYear === year.yearNum ? 'bg-blue-100 dark:bg-blue-950/40' : index % 2 === 1 ? 'bg-blue-50/55 dark:bg-blue-950/20' : 'bg-white dark:bg-slate-900'
               }`}
             >
               <div className="flex h-12 w-12 items-center justify-center rounded-md bg-otu-blue font-black text-white">Y{year.yearNum}</div>
@@ -960,22 +1115,22 @@ function DeadlinesTab({
 
   return (
     <section className="panel overflow-hidden">
-      <div className="flex items-center justify-between border-b border-slate-200 p-4 dark:border-slate-800">
+      <div className="flex items-center justify-between bg-otu-orange p-4 text-white">
         <h2 className="flex items-center gap-2 text-lg font-black">
-          <CalendarDays className="text-otu-orange" /> SAFA Deadlines
+          <CalendarDays /> SAFA Deadlines
         </h2>
         <div className="flex gap-2">
-          <button type="button" className="secondary-button" onClick={exportCalendar}>
+          <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-orange transition hover:bg-orange-50" onClick={exportCalendar}>
             <Download size={16} /> ICS
           </button>
-          <button type="button" className="primary-button" onClick={addDeadline}>
+          <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-orange transition hover:bg-orange-50" onClick={addDeadline}>
             <Plus size={16} /> Add
           </button>
         </div>
       </div>
       <div className="divide-y divide-slate-200 dark:divide-slate-800">
-        {state.deadlines.map((deadline) => (
-          <div key={deadline.id} className="grid gap-3 p-4 md:grid-cols-[auto_1fr_160px_150px_40px] md:items-center">
+        {state.deadlines.map((deadline, index) => (
+          <div key={deadline.id} className={`grid gap-3 p-4 md:grid-cols-[auto_1fr_160px_150px_40px] md:items-center ${index % 2 === 1 ? 'bg-orange-50/60 dark:bg-orange-950/20' : 'bg-white dark:bg-slate-900'}`}>
             <input type="checkbox" checked={deadline.completed} onChange={(event) => updateDeadline(deadline.id, { completed: event.target.checked })} />
             <input className="field" value={deadline.title} onChange={(event) => updateDeadline(deadline.id, { title: event.target.value })} />
             <input className="field" type="date" value={deadline.date} onChange={(event) => updateDeadline(deadline.id, { date: event.target.value })} />
@@ -998,6 +1153,540 @@ function DeadlinesTab({
         ))}
       </div>
     </section>
+  );
+}
+
+function AdminTab({
+  state,
+  updateState,
+  setTab,
+}: {
+  state: PlannerState;
+  updateState: (updater: (previous: PlannerState) => PlannerState) => void;
+  setTab: (tab: DashboardTab) => void;
+}) {
+  const [draft, setDraft] = useState<PlannerConfig>(state.config);
+  const [status, setStatus] = useState('');
+
+  const updateProgram = (key: ProgramKey, patch: Partial<PlannerConfig['programs'][ProgramKey]>) => {
+    setDraft((previous) => ({
+      ...previous,
+      programs: { ...previous.programs, [key]: { ...previous.programs[key], ...patch } },
+    }));
+  };
+
+  const updateHousing = (key: LivingSituation, patch: Partial<PlannerConfig['housing'][LivingSituation]>) => {
+    setDraft((previous) => ({
+      ...previous,
+      housing: { ...previous.housing, [key]: { ...previous.housing[key], ...patch } },
+    }));
+  };
+
+  const updateMealPlan = (key: MealPlanKey, patch: Partial<PlannerConfig['mealPlans'][MealPlanKey]>) => {
+    setDraft((previous) => ({
+      ...previous,
+      mealPlans: { ...previous.mealPlans, [key]: { ...previous.mealPlans[key], ...patch } },
+    }));
+  };
+
+  const saveConfig = async () => {
+    updateState((previous) => ({ ...previous, config: draft }));
+    await saveRemotePlannerConfig(draft).catch((error) => {
+      setStatus(error instanceof Error ? error.message : 'Remote preset save failed; local presets were updated.');
+    });
+    setStatus('Preset configuration saved.');
+  };
+
+  const applyToSelectedYear = () => {
+    updateState((previous) => {
+      const current = previous.yearlyBudgets[previous.selectedYear];
+      return {
+        ...previous,
+        config: draft,
+        yearlyBudgets: {
+          ...previous.yearlyBudgets,
+          [previous.selectedYear]: {
+            ...createInitialYearBudget(
+              previous.selectedYear,
+              previous.tuitionInflationRate,
+              current.program,
+              current.livingSituation,
+              draft,
+              current.mealPlan,
+              current.monthlyGroceries,
+            ),
+            planningMode: current.planningMode,
+            includeSummer: true,
+          },
+        },
+      };
+    });
+    setTab('budget');
+  };
+
+  return (
+    <div className="space-y-6">
+      <section className="panel overflow-hidden">
+        <div className="flex flex-col gap-3 bg-otu-blue p-5 text-white md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="flex items-center gap-2 text-xl font-black">
+              <Settings /> Admin Presets
+            </h2>
+            <p className="mt-1 text-sm text-blue-100">
+              Supabase admins are users with `app_metadata.role = "admin"`. Sandbox mode exposes this panel locally.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50" onClick={() => setDraft(defaultPlannerConfig)}>
+              Reset Defaults
+            </button>
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50" onClick={applyToSelectedYear}>
+              Apply to Year {state.selectedYear}
+            </button>
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-otu-orange px-4 py-2 text-sm font-bold text-white transition hover:bg-orange-700" onClick={saveConfig}>
+              Save Presets
+            </button>
+          </div>
+        </div>
+        {status && <p className="mt-4 rounded-md bg-blue-50 p-3 text-sm font-semibold text-otu-blue dark:bg-blue-950 dark:text-blue-100">{status}</p>}
+      </section>
+
+      <section className="grid gap-6 lg:grid-cols-2">
+        <div className="panel overflow-hidden">
+          <div className="bg-otu-blue p-4 text-white">
+            <h3 className="font-black">Program Tuition & Ancillary Fees</h3>
+          </div>
+          <div className="divide-y divide-slate-200 dark:divide-slate-800">
+            {Object.entries(draft.programs).map(([key, value], index) => (
+              <div key={key} className={`grid gap-3 p-4 md:grid-cols-[1fr_140px_140px] ${index % 2 === 1 ? 'bg-blue-50/55 dark:bg-blue-950/20' : 'bg-white dark:bg-slate-900'}`}>
+                <label className="text-sm font-bold">
+                  Program
+                  <input className="field mt-1" value={value.label} onChange={(event) => updateProgram(key as ProgramKey, { label: event.target.value })} />
+                </label>
+                <label className="text-sm font-bold">
+                  Tuition
+                  <input className="field mt-1" type="number" value={value.tuition} onChange={(event) => updateProgram(key as ProgramKey, { tuition: parseCurrencyInput(event.target.value) })} />
+                </label>
+                <label className="text-sm font-bold">
+                  Ancillary
+                  <input className="field mt-1" type="number" value={value.ancillary} onChange={(event) => updateProgram(key as ProgramKey, { ancillary: parseCurrencyInput(event.target.value) })} />
+                </label>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel overflow-hidden">
+          <div className="bg-otu-orange p-4 text-white">
+            <h3 className="font-black">Residence & Housing Costs</h3>
+          </div>
+          <div className="divide-y divide-slate-200 dark:divide-slate-800">
+            {Object.entries(draft.housing).map(([key, value], index) => (
+              <div key={key} className={`grid gap-3 p-4 md:grid-cols-[1fr_110px_110px_110px] ${index % 2 === 1 ? 'bg-orange-50/60 dark:bg-orange-950/20' : 'bg-white dark:bg-slate-900'}`}>
+                <label className="text-sm font-bold">
+                  Option
+                  <input className="field mt-1" value={value.label} onChange={(event) => updateHousing(key as LivingSituation, { label: event.target.value })} />
+                </label>
+                <label className="text-sm font-bold">
+                  Residence
+                  <input className="field mt-1" type="number" value={value.housing} onChange={(event) => updateHousing(key as LivingSituation, { housing: parseCurrencyInput(event.target.value) })} />
+                </label>
+                <label className="text-sm font-bold">
+                  Food
+                  <input className="field mt-1" type="number" value={value.food} onChange={(event) => updateHousing(key as LivingSituation, { food: parseCurrencyInput(event.target.value) })} />
+                </label>
+                <label className="text-sm font-bold">
+                  Utilities
+                  <input className="field mt-1" type="number" value={value.utilities} onChange={(event) => updateHousing(key as LivingSituation, { utilities: parseCurrencyInput(event.target.value) })} />
+                </label>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="bg-otu-blue p-4 text-white">
+          <h3 className="font-black">Meal Plan Options</h3>
+        </div>
+        <div className="grid gap-3 p-4 md:grid-cols-4">
+          {Object.entries(draft.mealPlans).map(([key, value], index) => (
+            <div key={key} className={`rounded-lg border border-slate-200 p-3 dark:border-slate-800 ${index % 2 === 1 ? 'bg-blue-50/55 dark:bg-blue-950/20' : 'bg-white dark:bg-slate-900'}`}>
+              <label className="text-sm font-bold">
+                Label
+                <input className="field mt-1" value={value.label} onChange={(event) => updateMealPlan(key as MealPlanKey, { label: event.target.value })} />
+              </label>
+              <label className="mt-3 block text-sm font-bold">
+                Cost
+                <input className="field mt-1" type="number" value={value.cost} onChange={(event) => updateMealPlan(key as MealPlanKey, { cost: parseCurrencyInput(event.target.value) })} />
+              </label>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function OnboardingWizard({
+  config,
+  onClose,
+  onFinish,
+  state,
+}: {
+  config: PlannerConfig;
+  onClose: () => void;
+  onFinish: (state: PlannerState) => void;
+  state: PlannerState;
+}) {
+  const [step, setStep] = useState(0);
+  const [program, setProgram] = useState<ProgramKey>('engineering');
+  const [livingSituation, setLivingSituation] = useState<LivingSituation>('on-campus');
+  const [mealPlan, setMealPlan] = useState<MealPlanKey>('standard');
+  const [monthlyGroceries, setMonthlyGroceries] = useState(475);
+  const [partTimeIncome, setPartTimeIncome] = useState(500);
+  const [scholarshipName, setScholarshipName] = useState('Scholarship');
+  const [scholarshipAmount, setScholarshipAmount] = useState(2000);
+  const [osapAmount, setOsapAmount] = useState(8600);
+  const [respAmount, setRespAmount] = useState(25000);
+  const [otherSavings, setOtherSavings] = useState(5000);
+  const [householdCount, setHouseholdCount] = useState(2);
+
+  const finish = () => {
+    const firstYear = createInitialYearBudget(1, state.tuitionInflationRate, program, livingSituation, config, mealPlan, monthlyGroceries);
+    const fundingSources = [
+      { id: 'funding-resp-1', name: 'RESP Draw (EAP + PSE)', amount: Math.min(respAmount, 8500), category: 'RESP/Savings' },
+      { id: 'funding-osap-1', name: 'OSAP Grants & Loans', amount: osapAmount, category: 'Government Aid' },
+      ...(scholarshipAmount > 0 ? [{ id: 'funding-scholarship-1', name: scholarshipName || 'Scholarship', amount: scholarshipAmount, category: 'Scholarships' }] : []),
+      ...(partTimeIncome > 0 ? [{ id: 'funding-work-1', name: 'Part-Time Work', amount: partTimeIncome * 8, category: 'Employment' }] : []),
+    ];
+    firstYear.fundingSources = fundingSources;
+    firstYear.fallFundingSources = fundingSources.map((item) => ({ ...item, id: `${item.id}-fall`, name: `${item.name} (Fall)`, amount: Math.round(item.amount / 2) }));
+    firstYear.winterFundingSources = fundingSources.map((item) => ({ ...item, id: `${item.id}-winter`, name: `${item.name} (Winter)`, amount: item.amount - Math.round(item.amount / 2) }));
+
+    const equalShare = Math.floor(100 / householdCount);
+    const households = Array.from({ length: householdCount }, (_, index) => ({
+      id: `household-${index + 1}`,
+      name: householdCount === 1 ? 'One Household' : `Household ${index + 1}`,
+      ratio: index === 0 ? 100 - equalShare * (householdCount - 1) : equalShare,
+    }));
+
+    const nextYearlyBudgets: Record<number, YearBudget> = { ...state.yearlyBudgets, 1: firstYear };
+    for (let year = 2; year <= state.degreeYearsCount; year += 1) {
+      nextYearlyBudgets[year] = createInitialYearBudget(year, state.tuitionInflationRate, program, year === 1 ? livingSituation : 'off-campus', config, 'none', monthlyGroceries);
+    }
+
+    onFinish({
+      ...state,
+      selectedYear: 1,
+      activeTerm: 'academic',
+      yearlyBudgets: nextYearlyBudgets,
+      households,
+      savingsSources: [
+        { id: 's-resp', name: 'Family RESP Account', amount: respAmount, type: 'RESP' },
+        { id: 's-personal', name: 'Education Savings', amount: otherSavings, type: 'Savings' },
+      ],
+      wizardCompleted: true,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const currentPreview = createInitialYearBudget(1, state.tuitionInflationRate, program, livingSituation, config, mealPlan, monthlyGroceries);
+  const previewCost = currentPreview.expenses.reduce((sum, expense) => sum + expense.totalAmount, 0);
+  const previewFunding = Math.min(respAmount, 8500) + osapAmount + scholarshipAmount + partTimeIncome * 8;
+  const previewGap = Math.max(0, previewCost - previewFunding);
+
+  const OptionCard = ({
+    active,
+    description,
+    label,
+    onClick,
+  }: {
+    active: boolean;
+    description?: string;
+    label: string;
+    onClick: () => void;
+  }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-lg border p-4 text-left transition ${
+        active
+          ? 'border-otu-orange bg-orange-50 shadow-soft ring-2 ring-otu-orange/20 dark:bg-orange-950/30'
+          : 'border-slate-200 bg-white hover:border-otu-sky hover:bg-blue-50/60 dark:border-slate-800 dark:bg-slate-950 dark:hover:border-otu-sky dark:hover:bg-slate-900'
+      }`}
+    >
+      <span className="flex items-start justify-between gap-3">
+        <span className="min-w-0 text-sm font-black leading-5 text-slate-900 dark:text-white">{label}</span>
+        <span
+          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+            active ? 'border-otu-orange bg-otu-orange text-white' : 'border-slate-300 dark:border-slate-600'
+          }`}
+        >
+          {active && <Check size={13} />}
+        </span>
+      </span>
+      {description && <span className="mt-2 block text-sm leading-5 text-slate-600 dark:text-slate-300">{description}</span>}
+    </button>
+  );
+
+  const MoneyField = ({
+    label,
+    onChange,
+    value,
+  }: {
+    label: string;
+    onChange: (value: number) => void;
+    value: number;
+  }) => (
+    <label className="rounded-lg border border-slate-200 bg-white p-4 text-sm font-bold dark:border-slate-800 dark:bg-slate-950">
+      <span className="text-slate-700 dark:text-slate-200">{label}</span>
+      <span className="mt-3 flex items-center rounded-md border border-slate-300 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
+        <span className="text-sm font-black text-slate-400">$</span>
+        <input
+          className="w-full bg-transparent pl-2 text-lg font-black text-slate-900 focus:outline-none dark:text-white"
+          type="number"
+          value={value}
+          onChange={(event) => onChange(parseCurrencyInput(event.target.value))}
+        />
+      </span>
+    </label>
+  );
+
+  const steps = [
+    {
+      eyebrow: 'Start with school costs',
+      title: 'What Ontario Tech program are you planning for?',
+      subtitle: 'Choose the program first. This sets the tuition and ancillary fee defaults for the first draft.',
+      body: (
+        <div className="question-card">
+          <h3 className="text-sm font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Program</h3>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {Object.entries(config.programs).map(([key, value]) => (
+              <OptionCard
+                key={key}
+                active={program === key}
+                description={`${formatCAD(value.tuition)} tuition + ${formatCAD(value.ancillary)} ancillary fees`}
+                label={value.label}
+                onClick={() => setProgram(key as ProgramKey)}
+              />
+            ))}
+          </div>
+        </div>
+      ),
+    },
+    {
+      eyebrow: 'Home base',
+      title: 'Where will the student live?',
+      subtitle: 'Housing is usually the biggest swing factor after tuition, so it gets its own step.',
+      body: (
+        <div className="question-card">
+          <h3 className="text-sm font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Living Situation</h3>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {Object.entries(config.housing).map(([key, value]) => (
+              <OptionCard
+                key={key}
+                active={livingSituation === key}
+                description={`${value.description} Housing default: ${formatCAD(value.housing)}`}
+                label={value.label}
+                onClick={() => {
+                  const next = key as LivingSituation;
+                  setLivingSituation(next);
+                  setMealPlan(next === 'on-campus' || next === 'south-village' ? 'standard' : 'none');
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      ),
+    },
+    {
+      eyebrow: 'Food and monthly cash flow',
+      title: 'How will food and work income look this year?',
+      subtitle: 'Pick a meal plan or estimate groceries, then add expected part-time income.',
+      body: (
+        <div className="space-y-5">
+          <div className="question-card">
+            <h3 className="text-sm font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Meal Plan</h3>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {Object.entries(config.mealPlans).map(([key, value]) => (
+                <OptionCard
+                  key={key}
+                  active={mealPlan === key}
+                  description={key === 'none' ? 'Use groceries instead' : `${formatCAD(value.cost)} estimated annual cost`}
+                  label={value.label}
+                  onClick={() => setMealPlan(key as MealPlanKey)}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <MoneyField label="Estimated groceries per month" value={monthlyGroceries} onChange={setMonthlyGroceries} />
+            <MoneyField label="Part-time income per month" value={partTimeIncome} onChange={setPartTimeIncome} />
+          </div>
+        </div>
+      ),
+    },
+    {
+      eyebrow: 'Funding sources',
+      title: 'What resources are available for the first year?',
+      subtitle: 'Add scholarships, OSAP, RESP funds, and other education savings.',
+      body: (
+        <div className="question-card">
+          <h3 className="text-sm font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Aid and Savings</h3>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="rounded-lg border border-slate-200 bg-white p-4 text-sm font-bold dark:border-slate-800 dark:bg-slate-950">
+              Scholarship name
+              <input className="field mt-3" value={scholarshipName} onChange={(event) => setScholarshipName(event.target.value)} />
+            </label>
+            <MoneyField label="Scholarship amount" value={scholarshipAmount} onChange={setScholarshipAmount} />
+            <MoneyField label="OSAP estimate" value={osapAmount} onChange={setOsapAmount} />
+            <MoneyField label="RESP balance" value={respAmount} onChange={setRespAmount} />
+            <MoneyField label="Other education savings" value={otherSavings} onChange={setOtherSavings} />
+          </div>
+        </div>
+      ),
+    },
+    {
+      eyebrow: 'Family support',
+      title: 'How many households will split the remaining gap?',
+      subtitle: 'Start with an equal split. You can fine-tune household ratios later in the splitter.',
+      body: (
+        <div className="question-card">
+          <h3 className="text-sm font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Household Split</h3>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            {[1, 2, 3, 4].map((count) => (
+              <OptionCard
+                key={count}
+                active={householdCount === count}
+                description={count === 1 ? 'One payer group' : `${count} equal starting shares`}
+                label={count === 1 ? 'One Household' : `${count} Households`}
+                onClick={() => setHouseholdCount(count)}
+              />
+            ))}
+          </div>
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-6xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950">
+        <div className="grid max-h-[92vh] overflow-hidden lg:grid-cols-[320px_1fr]">
+          <aside className="bg-otu-blue p-6 text-white">
+            <div className="flex items-center justify-between">
+              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-otu-orange shadow-lg">
+                <GraduationCap size={26} />
+              </div>
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-white/20 bg-white/10 text-white hover:bg-white/20"
+                aria-label="Close wizard"
+                onClick={onClose}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <p className="mt-8 text-xs font-black uppercase tracking-[0.22em] text-otu-sky">Ontario Tech Setup</p>
+            <h2 className="mt-3 text-3xl font-black leading-tight">Build a strong first draft in minutes.</h2>
+            <p className="mt-4 text-sm leading-6 text-blue-100">
+              Answer a few practical questions and the planner will assemble tuition, housing, aid, savings, and family split defaults.
+            </p>
+            <div className="mt-8 space-y-3">
+              {steps.map((wizardStep, index) => (
+                <button
+                  key={wizardStep.title}
+                  type="button"
+                  onClick={() => setStep(index)}
+                  className={`flex w-full items-center gap-3 rounded-lg p-3 text-left transition ${
+                    step === index ? 'bg-white text-otu-blue shadow-lg' : 'bg-white/10 text-blue-50 hover:bg-white/15'
+                  }`}
+                >
+                  <span
+                    className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-black ${
+                      step > index ? 'bg-emerald-500 text-white' : step === index ? 'bg-otu-orange text-white' : 'bg-white/15 text-white'
+                    }`}
+                  >
+                    {step > index ? <Check size={15} /> : index + 1}
+                  </span>
+                  <span>
+                    <span className="block text-sm font-black">{wizardStep.title}</span>
+                    <span className={`text-xs ${step === index ? 'text-slate-500' : 'text-blue-100'}`}>{wizardStep.eyebrow}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <section className="overflow-y-auto bg-slate-50 p-5 dark:bg-slate-950 md:p-7">
+            <div className="mb-6 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+              <div
+                className="h-full rounded-full bg-otu-orange transition-all"
+                style={{ width: `${((step + 1) / steps.length) * 100}%` }}
+              />
+            </div>
+
+            <div className="grid gap-6 xl:grid-cols-[1fr_280px]">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wide text-otu-orange">{steps[step].eyebrow}</p>
+                <h2 className="mt-2 text-3xl font-black tracking-normal text-slate-950 dark:text-white">{steps[step].title}</h2>
+                <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">{steps[step].subtitle}</p>
+                <div className="mt-6">{steps[step].body}</div>
+              </div>
+
+              <aside className="h-fit rounded-lg border border-slate-200 bg-white p-4 shadow-soft dark:border-slate-800 dark:bg-slate-900">
+                <p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Live Draft</p>
+                <div className="mt-4 space-y-3">
+                  <div>
+                    <p className="text-xs font-bold text-slate-500">Program</p>
+                    <p className="font-black">{config.programs[program].label}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-slate-500">Housing</p>
+                    <p className="font-black">{config.housing[livingSituation].label}</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 rounded-lg bg-slate-100 p-3 dark:bg-slate-800">
+                    <div>
+                      <p className="text-xs font-bold text-slate-500">Costs</p>
+                      <p className="font-black text-otu-blue dark:text-otu-sky">{formatCAD(previewCost)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-500">Funding</p>
+                      <p className="font-black text-emerald-600">{formatCAD(previewFunding)}</p>
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-otu-blue p-4 text-white">
+                    <p className="text-xs font-black uppercase text-otu-sky">Estimated Gap</p>
+                    <p className="mt-1 text-2xl font-black">{formatCAD(previewGap)}</p>
+                  </div>
+                </div>
+              </aside>
+            </div>
+
+            <div className="mt-8 flex flex-col gap-3 border-t border-slate-200 pt-5 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-sm font-bold text-slate-500">
+                Step {step + 1} of {steps.length}
+              </span>
+              <div className="flex gap-2">
+                <button type="button" className="secondary-button" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))}>
+                  Back
+                </button>
+                {step < steps.length - 1 ? (
+                  <button type="button" className="primary-button" onClick={() => setStep((value) => value + 1)}>
+                    Next <ArrowRight size={16} />
+                  </button>
+                ) : (
+                  <button type="button" className="primary-button" onClick={finish}>
+                    Build Budget <Sparkles size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
   );
 }
 

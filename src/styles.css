@@ -44,6 +44,26 @@
   .secondary-button {
     @apply inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-800 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800;
   }
+
+  .brand-shell {
+    @apply overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft dark:border-slate-800 dark:bg-slate-900;
+  }
+
+  .brand-rail {
+    @apply bg-otu-blue p-5 text-white;
+  }
+
+  .question-card {
+    @apply rounded-lg border border-slate-200 bg-white p-5 shadow-soft dark:border-slate-800 dark:bg-slate-900;
+  }
+
+  .question-card-title {
+    @apply text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400;
+  }
+
+  .soft-input-card {
+    @apply rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950;
+  }
 }
 
 @media print {

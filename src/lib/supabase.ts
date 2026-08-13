@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
-import type { PlannerState, SharePayload } from '../types';
+import type { PlannerConfig, PlannerState, SharePayload } from '../types';
+import { defaultPlannerConfig } from '../data/presets';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -107,4 +108,34 @@ export const loadRemoteShare = async (token: string) => {
   const { data, error } = await supabase.from('share_links').select('payload').eq('token', token).single();
   if (error || !data) return null;
   return data.payload as SharePayload;
+};
+
+export const getCurrentUserIsAdmin = async () => {
+  if (!supabase) return true;
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data.user) return false;
+  return data.user.app_metadata?.role === 'admin';
+};
+
+export const loadRemotePlannerConfig = async () => {
+  if (!supabase) return defaultPlannerConfig;
+  const { data, error } = await supabase
+    .from('planner_config')
+    .select('config')
+    .eq('key', 'default')
+    .maybeSingle();
+  if (error || !data?.config) return defaultPlannerConfig;
+  return data.config as PlannerConfig;
+};
+
+export const saveRemotePlannerConfig = async (config: PlannerConfig) => {
+  if (!supabase) return;
+  const isAdmin = await getCurrentUserIsAdmin();
+  if (!isAdmin) throw new Error('Admin access is required to update planner presets.');
+  const { error } = await supabase.from('planner_config').upsert({
+    key: 'default',
+    config,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) throw error;
 };

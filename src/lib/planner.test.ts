@@ -15,7 +15,9 @@ describe('planner calculations', () => {
 
     expect(totals.totalFunding).toBeGreaterThan(0);
     expect(totals.totalExpensesCost).toBeGreaterThan(totals.totalFunding);
-    expect(totals.netStudentDeficit).toBe(totals.myShareExpenses - totals.totalFunding);
+    expect(totals.netStudentDeficit).toBe(
+      totals.myShareExpenses + totals.summerExpensesTotal - totals.totalFunding - totals.summerFunding,
+    );
   });
 
   it('aggregates semester mode from fall and winter lists', () => {

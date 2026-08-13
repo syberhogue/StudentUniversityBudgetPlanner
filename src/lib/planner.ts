@@ -1,10 +1,12 @@
-import { defaultDeadlines, housingPresets, programPresets } from '../data/presets';
+import { defaultDeadlines, defaultPlannerConfig } from '../data/presets';
 import type {
   DegreeAnalysis,
   ExpenseItem,
   Household,
   LivingSituation,
+  MealPlanKey,
   MoneyItem,
+  PlannerConfig,
   PlannerState,
   ProgramKey,
   Term,
@@ -42,10 +44,14 @@ export const createInitialYearBudget = (
   tuitionInflationRate = 3,
   program: ProgramKey = yearNum === 1 ? 'engineering' : 'healthSci',
   livingSituation: LivingSituation = yearNum === 1 ? 'on-campus' : 'off-campus',
+  config: PlannerConfig = defaultPlannerConfig,
+  mealPlan: MealPlanKey = livingSituation === 'on-campus' || livingSituation === 'south-village' ? 'standard' : 'none',
+  monthlyGroceries = livingSituation === 'home' ? 250 : 475,
 ): YearBudget => {
   const tuitionMultiplier = Math.pow(1 + tuitionInflationRate / 100, yearNum - 1);
-  const programPreset = programPresets[program];
-  const housingPreset = housingPresets[livingSituation];
+  const programPreset = config.programs[program];
+  const housingPreset = config.housing[livingSituation];
+  const foodCost = mealPlan === 'none' ? monthlyGroceries * 8 : config.mealPlans[mealPlan].cost;
 
   const fundingSources: MoneyItem[] = [
     {
@@ -112,7 +118,7 @@ export const createInitialYearBudget = (
     {
       id: `expense-food-${yearNum}`,
       name: livingSituation === 'home' ? 'Groceries & Commuter Meals' : 'Meal Plan / Groceries',
-      totalAmount: Math.round(housingPreset.food * tuitionMultiplier),
+      totalAmount: Math.round(foodCost * tuitionMultiplier),
       coveredByOthers: 0,
       category: 'Food',
     },
@@ -150,6 +156,8 @@ export const createInitialYearBudget = (
     planningMode: 'standard',
     livingSituation,
     program,
+    mealPlan,
+    monthlyGroceries,
     fundingSources,
     expenses,
     fallFundingSources: splitMoneyItems(fundingSources, 'fall'),
@@ -171,7 +179,7 @@ export const createInitialYearBudget = (
       {
         id: `summer-food-${yearNum}`,
         name: 'Summer Groceries',
-        totalAmount: Math.round(housingPreset.food / 2),
+        totalAmount: Math.round(monthlyGroceries * 4),
         coveredByOthers: 0,
         category: 'Food',
       },
@@ -209,8 +217,35 @@ export const createInitialPlannerState = (): PlannerState => ({
     { id: 'h-dad', name: 'Household 2', ratio: 50 },
   ],
   deadlines: defaultDeadlines,
+  config: defaultPlannerConfig,
+  wizardCompleted: false,
   updatedAt: new Date().toISOString(),
 });
+
+export const hydratePlannerState = (partial: Partial<PlannerState>): PlannerState => {
+  const base = createInitialPlannerState();
+  const config: PlannerConfig = {
+    programs: { ...base.config.programs, ...partial.config?.programs },
+    housing: { ...base.config.housing, ...partial.config?.housing },
+    mealPlans: { ...base.config.mealPlans, ...partial.config?.mealPlans },
+  };
+  const yearlyBudgets = { ...base.yearlyBudgets, ...partial.yearlyBudgets };
+  Object.entries(yearlyBudgets).forEach(([year, budget]) => {
+    yearlyBudgets[Number(year)] = {
+      ...budget,
+      mealPlan: budget.mealPlan ?? (budget.livingSituation === 'on-campus' || budget.livingSituation === 'south-village' ? 'standard' : 'none'),
+      monthlyGroceries: budget.monthlyGroceries ?? (budget.livingSituation === 'home' ? 250 : 475),
+    };
+  });
+
+  return {
+    ...base,
+    ...partial,
+    config,
+    yearlyBudgets,
+    wizardCompleted: partial.wizardCompleted ?? false,
+  };
+};
 
 const sumFunding = (items: MoneyItem[]) => items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 const sumExpenses = (items: ExpenseItem[]) =>
@@ -255,9 +290,9 @@ export const calculateTermTotals = (budget: YearBudget, activeTerm: Term): TermT
   const academicTotalExpenses =
     budget.planningMode === 'semester' ? fallTotalExpenses + winterTotalExpenses : standardTotalExpenses;
 
-  const summerFunding = budget.includeSummer ? sumFunding(budget.summerFundingSources) : 0;
-  const summerExpensesTotal = budget.includeSummer ? sumMyShare(budget.summerExpenses) : 0;
-  const summerTotalExpenses = budget.includeSummer ? sumExpenses(budget.summerExpenses) : 0;
+  const summerFunding = sumFunding(budget.summerFundingSources);
+  const summerExpensesTotal = sumMyShare(budget.summerExpenses);
+  const summerTotalExpenses = sumExpenses(budget.summerExpenses);
   const summerSurplusThisYear = Math.max(0, summerFunding - summerExpensesTotal);
 
   const termValues =
@@ -297,7 +332,8 @@ export const calculateDegreeAnalysis = (state: PlannerState): DegreeAnalysis => 
 
   const yearlyBreakdowns = Array.from({ length: state.degreeYearsCount }, (_, index) => {
     const yearNum = index + 1;
-    const budget = state.yearlyBudgets[yearNum] ?? createInitialYearBudget(yearNum, state.tuitionInflationRate);
+    const budget =
+      state.yearlyBudgets[yearNum] ?? createInitialYearBudget(yearNum, state.tuitionInflationRate, 'healthSci', 'off-campus', state.config);
     const academicExpenses =
       budget.planningMode === 'semester'
         ? [...budget.fallExpenses, ...budget.winterExpenses]
@@ -317,15 +353,15 @@ export const calculateDegreeAnalysis = (state: PlannerState): DegreeAnalysis => 
       .filter((expense) => expense.category !== 'Academic' && expense.category !== 'Housing' && expense.category !== 'Food')
       .reduce((sum, expense) => sum + expense.totalAmount, 0);
 
-    const summerCost = budget.includeSummer ? sumExpenses(budget.summerExpenses) : 0;
-    const summerIncome = budget.includeSummer ? sumFunding(budget.summerFundingSources) : 0;
+    const summerCost = sumExpenses(budget.summerExpenses);
+    const summerIncome = sumFunding(budget.summerFundingSources);
     const summerSurplus = Math.max(0, summerIncome - summerCost);
     if (summerSurplus > 0) {
       currentSavingsPool += summerSurplus;
       totalSummerSurplusGenerated += summerSurplus;
     }
 
-    const summerFunding = budget.includeSummer ? budget.summerFundingSources : [];
+    const summerFunding = budget.summerFundingSources;
     const allFunding = [...academicFunding, ...summerFunding];
     const respDraw = allFunding
       .filter((source) => source.name.toLowerCase().includes('resp'))
@@ -341,7 +377,7 @@ export const calculateDegreeAnalysis = (state: PlannerState): DegreeAnalysis => 
       .reduce((sum, source) => sum + source.amount, 0);
 
     const academicCost = tuitionAndAcademic + livingAndFood + lifestyleAndMisc;
-    const netSummerExpense = budget.includeSummer ? Math.max(0, summerCost - summerIncome) : 0;
+    const netSummerExpense = Math.max(0, summerCost - summerIncome);
     const totalCost = academicCost + netSummerExpense;
     const totalEarnedAndAid = grantsAndScholarships + employmentIncome;
     const parentCoverageNeeded = Math.max(0, totalCost - totalEarnedAndAid - respDraw - personalSavingsDraw);

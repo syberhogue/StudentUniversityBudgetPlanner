@@ -2,6 +2,7 @@ export type PlanningMode = 'standard' | 'semester';
 export type Term = 'academic' | 'fall' | 'winter' | 'summer';
 export type LivingSituation = 'on-campus' | 'south-village' | 'off-campus' | 'home';
 export type AccountType = 'RESP' | 'Savings';
+export type MealPlanKey = 'none' | 'light' | 'standard' | 'full';
 
 export interface MoneyItem {
   id: string;
@@ -22,6 +23,8 @@ export interface YearBudget {
   planningMode: PlanningMode;
   livingSituation: LivingSituation;
   program: ProgramKey;
+  mealPlan: MealPlanKey;
+  monthlyGroceries: number;
   fundingSources: MoneyItem[];
   expenses: ExpenseItem[];
   fallFundingSources: MoneyItem[];
@@ -57,6 +60,32 @@ export interface DeadlineEvent {
 
 export type ProgramKey = 'engineering' | 'computerScience' | 'healthSci' | 'nursing' | 'arts';
 
+export interface ProgramPreset {
+  label: string;
+  tuition: number;
+  ancillary: number;
+}
+
+export interface HousingPreset {
+  label: string;
+  housing: number;
+  food: number;
+  utilities: number;
+  description: string;
+}
+
+export interface MealPlanPreset {
+  label: string;
+  cost: number;
+  description: string;
+}
+
+export interface PlannerConfig {
+  programs: Record<ProgramKey, ProgramPreset>;
+  housing: Record<LivingSituation, HousingPreset>;
+  mealPlans: Record<MealPlanKey, MealPlanPreset>;
+}
+
 export interface PlannerState {
   title: string;
   studentName: string;
@@ -69,6 +98,8 @@ export interface PlannerState {
   savingsSources: SavingsAccount[];
   households: Household[];
   deadlines: DeadlineEvent[];
+  config: PlannerConfig;
+  wizardCompleted: boolean;
   updatedAt: string;
 }
 
