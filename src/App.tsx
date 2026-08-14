@@ -72,6 +72,9 @@ import type {
   PlannerConfig,
   PlannerState,
   ProgramKey,
+  RowPreset,
+  RowPresetItem,
+  RowPresetKind,
   SavingsAccount,
   Term,
   YearBudget,
@@ -80,6 +83,83 @@ import type {
 type Route = 'landing' | 'auth' | 'app' | 'share';
 type DashboardTab = 'budget' | 'split' | 'degree' | 'deadlines' | 'admin';
 type BudgetCard = 'savings' | 'funding' | 'expenses';
+
+const rowPresetKindLabels: Record<RowPresetKind, string> = {
+  savings: 'Savings',
+  funding: 'Income & Aid',
+  expenses: 'Expenses',
+  households: 'Household Split',
+  deadlines: 'Deadlines',
+};
+
+const getRowPresets = (state: PlannerState, kind: RowPresetKind) =>
+  state.rowPresets.filter((preset) => preset.kind === kind);
+
+const cloneRowPresetItems = (kind: RowPresetKind, items: RowPresetItem[]): RowPresetItem[] => {
+  if (kind === 'savings') {
+    return items.map((item) => {
+      const source = item as SavingsAccount;
+      return {
+        id: uid('savings'),
+        name: source.name,
+        amount: Number(source.amount || 0),
+        type: source.type === 'RESP' ? 'RESP' : 'Savings',
+      };
+    });
+  }
+
+  if (kind === 'funding') {
+    return items.map((item) => {
+      const source = item as MoneyItem;
+      return {
+        id: uid('income'),
+        name: source.name,
+        amount: Number(source.amount || 0),
+        category: source.category,
+        savingsSourceId: source.savingsSourceId,
+      };
+    });
+  }
+
+  if (kind === 'expenses') {
+    return items.map((item) => {
+      const expense = item as ExpenseItem;
+      return {
+        id: uid('expense'),
+        name: expense.name,
+        totalAmount: Number(expense.totalAmount || 0),
+        coveredByOthers: Number(expense.coveredByOthers || 0),
+        category: expense.category,
+        amountBasis: 'semester' as const,
+      };
+    });
+  }
+
+  if (kind === 'households') {
+    return normalizeHouseholdRatios(
+      items.map((item) => {
+        const household = item as { name: string; ratio: number };
+        return {
+          id: uid('household'),
+          name: household.name,
+          ratio: Number(household.ratio || 0),
+        };
+      }),
+    );
+  }
+
+  return items.map((item) => {
+    const deadline = item as DeadlineEvent;
+    return {
+      id: uid('deadline'),
+      title: deadline.title,
+      date: deadline.date,
+      category: deadline.category,
+      notes: deadline.notes,
+      completed: Boolean(deadline.completed),
+    };
+  });
+};
 
 const getRoute = (): { route: Route; token?: string } => {
   const path = window.location.pathname;
@@ -152,31 +232,6 @@ const NavButton = ({
     {children}
   </button>
 );
-
-function BrandedCard({
-  children,
-  icon,
-  title,
-  tone,
-}: {
-  children: React.ReactNode;
-  icon: React.ReactNode;
-  title: string;
-  tone: 'blue' | 'orange';
-}) {
-  const headerClass = tone === 'blue' ? 'bg-otu-blue text-white' : 'bg-otu-orange text-white';
-
-  return (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-soft dark:border-slate-800 dark:bg-slate-900">
-      <div className={`flex w-full items-center justify-between gap-3 p-4 text-left ${headerClass}`}>
-        <span className="flex items-center gap-2 text-sm font-black">
-          {icon} {title}
-        </span>
-      </div>
-      <div className="p-4">{children}</div>
-    </div>
-  );
-}
 
 function LandingPage({ navigate }: { navigate: (path: string) => void }) {
   const [program, setProgram] = useState<ProgramKey>('comprehensiveEngineering');
@@ -462,14 +517,6 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
     updateState((previous) => ({ ...previous, activeTerm: term }));
   };
 
-  const applyPreset = (program: ProgramKey, livingSituation: LivingSituation, mealPlan = budget.mealPlan, monthlyGroceries = budget.monthlyGroceries) => {
-    updateBudget(state.selectedYear, (current) => ({
-      ...createInitialYearBudget(state.selectedYear, state.tuitionInflationRate, program, livingSituation, state.config, mealPlan, monthlyGroceries),
-      planningMode: current.planningMode,
-      includeSummer: true,
-    }));
-  };
-
   const updateItem = (type: 'funding' | 'expense', id: string, patch: Partial<MoneyItem & ExpenseItem>) => {
     updateBudget(state.selectedYear, (current) => {
       const key = type === 'funding' ? getFundingKey(activeTerm) : getExpenseKey(activeTerm);
@@ -501,6 +548,48 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
     updateBudget(state.selectedYear, (current) => {
       const key = type === 'funding' ? getFundingKey(activeTerm) : getExpenseKey(activeTerm);
       return { ...current, [key]: current[key].filter((item) => item.id !== id) };
+    });
+  };
+
+  const clearItems = (type: 'funding' | 'expense') => {
+    updateBudget(state.selectedYear, (current) => {
+      const key = type === 'funding' ? getFundingKey(activeTerm) : getExpenseKey(activeTerm);
+      return { ...current, [key]: [] };
+    });
+  };
+
+  const replaceItems = (type: 'funding' | 'expense', items: RowPresetItem[]) => {
+    updateBudget(state.selectedYear, (current) => {
+      const key = type === 'funding' ? getFundingKey(activeTerm) : getExpenseKey(activeTerm);
+      const kind = type === 'funding' ? 'funding' : 'expenses';
+      return { ...current, [key]: cloneRowPresetItems(kind, items) };
+    });
+  };
+
+  const saveRowPreset = (kind: RowPresetKind, name: string, items: RowPresetItem[]) => {
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+
+    updateState((previous) => {
+      const now = new Date().toISOString();
+      const existing = previous.rowPresets.find(
+        (preset) => preset.kind === kind && preset.name.trim().toLowerCase() === trimmedName.toLowerCase(),
+      );
+      const nextPreset: RowPreset = {
+        id: existing?.id ?? uid('preset'),
+        kind,
+        name: trimmedName,
+        items: cloneRowPresetItems(kind, items),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+
+      return {
+        ...previous,
+        rowPresets: existing
+          ? previous.rowPresets.map((preset) => (preset.id === existing.id ? nextPreset : preset))
+          : [...previous.rowPresets, nextPreset],
+      };
     });
   };
 
@@ -537,6 +626,21 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
     window.print();
     pre.remove();
   };
+
+  if (showWizard) {
+    return (
+      <OnboardingWizard
+        config={state.config}
+        onClose={() => setShowWizard(false)}
+        onFinish={(nextState) => {
+          setState(nextState);
+          setShowWizard(false);
+          setTab('budget');
+        }}
+        state={state}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen pb-16">
@@ -681,72 +785,6 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
                   )}
                 </div>
               </div>
-              {tab === 'budget' && (
-                <div className="grid gap-4 border-t border-slate-200 p-4 dark:border-slate-800 lg:grid-cols-[0.9fr_1.1fr]">
-                  <BrandedCard icon={<GraduationCap size={18} />} tone="blue" title="Academic Setup">
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <label className="text-sm font-bold">
-                        Year
-                        <select
-                          className="field mt-1"
-                          value={state.selectedYear}
-                          onChange={(event) => updateState((previous) => ({ ...previous, selectedYear: parseCurrencyInput(event.target.value), activeTerm: 'academic' }))}
-                        >
-                          {Array.from({ length: state.degreeYearsCount }, (_, index) => index + 1).map((year) => (
-                            <option key={year} value={year}>
-                              Year {year}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="text-sm font-bold sm:col-span-2">
-                        Program
-                        <select className="field mt-1" value={budget.program} onChange={(event) => applyPreset(event.target.value as ProgramKey, budget.livingSituation)}>
-                          {Object.entries(state.config.programs).map(([key, value]) => (
-                            <option key={key} value={key}>
-                              {value.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                  </BrandedCard>
-
-                  <BrandedCard icon={<Home size={18} />} tone="orange" title="Living Situation">
-                    <div className="grid gap-3 md:grid-cols-[1fr_1fr_130px]">
-                      <label className="text-sm font-bold">
-                        Housing
-                        <select className="field mt-1" value={budget.livingSituation} onChange={(event) => applyPreset(budget.program, event.target.value as LivingSituation)}>
-                          {Object.entries(state.config.housing).map(([key, value]) => (
-                            <option key={key} value={key}>
-                              {value.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="text-sm font-bold">
-                        Meal plan
-                        <select className="field mt-1" value={budget.mealPlan} onChange={(event) => applyPreset(budget.program, budget.livingSituation, event.target.value as MealPlanKey)}>
-                          {Object.entries(state.config.mealPlans).map(([key, value]) => (
-                            <option key={key} value={key}>
-                              {value.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="text-sm font-bold">
-                        Groceries/mo
-                        <input
-                          className="field mt-1"
-                          type="number"
-                          value={budget.monthlyGroceries}
-                          onChange={(event) => applyPreset(budget.program, budget.livingSituation, budget.mealPlan, parseCurrencyInput(event.target.value))}
-                        />
-                      </label>
-                    </div>
-                  </BrandedCard>
-                </div>
-              )}
             </>
           )}
         </section>
@@ -788,27 +826,18 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
             selectedYear={state.selectedYear}
             updateState={updateState}
             addItem={addItem}
+            clearItems={clearItems}
             updateItem={updateItem}
             removeItem={removeItem}
+            replaceItems={replaceItems}
+            saveRowPreset={saveRowPreset}
           />
         )}
-        {tab === 'split' && <SplitterTab state={state} splitGap={selectedYearTotals.netStudentDeficit} updateState={updateState} />}
+        {tab === 'split' && <SplitterTab state={state} splitGap={selectedYearTotals.netStudentDeficit} updateState={updateState} saveRowPreset={saveRowPreset} />}
         {tab === 'degree' && <DegreeTab state={state} degree={degree} />}
-        {tab === 'deadlines' && <DeadlinesTab state={state} updateState={updateState} exportCalendar={exportCalendar} />}
+        {tab === 'deadlines' && <DeadlinesTab state={state} updateState={updateState} exportCalendar={exportCalendar} saveRowPreset={saveRowPreset} />}
         {tab === 'admin' && isAdmin && <AdminTab state={state} updateState={updateState} setTab={setTab} />}
       </main>
-      {showWizard && (
-        <OnboardingWizard
-          config={state.config}
-          onClose={() => setShowWizard(false)}
-          onFinish={(nextState) => {
-            setState(nextState);
-            setShowWizard(false);
-            setTab('budget');
-          }}
-          state={state}
-        />
-      )}
     </div>
   );
 }
@@ -939,8 +968,11 @@ function BudgetTab({
   selectedYear,
   updateState,
   addItem,
+  clearItems,
   updateItem,
   removeItem,
+  replaceItems,
+  saveRowPreset,
 }: {
   activeBudgetCard: BudgetCard;
   lists: { funding: MoneyItem[]; expenses: ExpenseItem[] };
@@ -948,13 +980,18 @@ function BudgetTab({
   selectedYear: number;
   updateState: (updater: (previous: PlannerState) => PlannerState) => void;
   addItem: (type: 'funding' | 'expense') => void;
+  clearItems: (type: 'funding' | 'expense') => void;
   updateItem: (type: 'funding' | 'expense', id: string, patch: Partial<MoneyItem & ExpenseItem>) => void;
   removeItem: (type: 'funding' | 'expense', id: string) => void;
+  replaceItems: (type: 'funding' | 'expense', items: RowPresetItem[]) => void;
+  saveRowPreset: (kind: RowPresetKind, name: string, items: RowPresetItem[]) => void;
 }) {
   return (
     <section className="grid gap-6">
         {activeBudgetCard === 'savings' && (
           <SavingsCard
+            rowPresets={getRowPresets(state, 'savings')}
+            saveRowPreset={saveRowPreset}
             savingsSources={state.savingsSources}
             updateState={updateState}
           />
@@ -970,8 +1007,12 @@ function BudgetTab({
             savingsSources={state.savingsSources}
             state={state}
             addItem={addItem}
+            clearItems={clearItems}
             updateItem={updateItem}
             removeItem={removeItem}
+            replaceItems={replaceItems}
+            rowPresets={getRowPresets(state, 'funding')}
+            saveRowPreset={saveRowPreset}
           />
         )}
         {activeBudgetCard === 'expenses' && (
@@ -982,8 +1023,12 @@ function BudgetTab({
             type="expense"
             categories={expenseCategories}
             addItem={addItem}
+            clearItems={clearItems}
             updateItem={updateItem}
             removeItem={removeItem}
+            replaceItems={replaceItems}
+            rowPresets={getRowPresets(state, 'expenses')}
+            saveRowPreset={saveRowPreset}
           />
         )}
     </section>
@@ -1214,6 +1259,79 @@ function HouseholdSplitSummaryCard({
   );
 }
 
+function RowPresetControls({
+  currentRows,
+  kind,
+  onApply,
+  onClear,
+  onSave,
+  presets,
+  tone,
+}: {
+  currentRows: RowPresetItem[];
+  kind: RowPresetKind;
+  onApply: (preset: RowPreset) => void;
+  onClear: () => void;
+  onSave: (name: string) => void;
+  presets: RowPreset[];
+  tone: 'blue' | 'orange';
+}) {
+  const [selectedPresetId, setSelectedPresetId] = useState('');
+  const [templateName, setTemplateName] = useState('');
+  const selectedPreset = presets.find((preset) => preset.id === selectedPresetId);
+  const accentClass = tone === 'blue' ? 'text-otu-blue hover:bg-blue-50' : 'text-otu-orange hover:bg-orange-50';
+
+  const saveTemplate = () => {
+    const name = templateName.trim() || `${rowPresetKindLabels[kind]} Template`;
+    onSave(name);
+    setTemplateName('');
+  };
+
+  return (
+    <div className="grid gap-3 border-b border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/70 lg:grid-cols-[minmax(180px,1fr)_auto_minmax(180px,1fr)_auto_auto] lg:items-center">
+      <label className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">
+        Template
+        <select className="field mt-1" value={selectedPresetId} onChange={(event) => setSelectedPresetId(event.target.value)}>
+          <option value="">Select template</option>
+          {presets.map((preset) => (
+            <option key={preset.id} value={preset.id}>
+              {preset.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        className={`secondary-button self-end ${accentClass}`}
+        disabled={!selectedPreset}
+        onClick={() => selectedPreset && onApply(selectedPreset)}
+      >
+        Apply
+      </button>
+      <label className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">
+        Save Current Rows
+        <input
+          className="field mt-1"
+          placeholder={`${rowPresetKindLabels[kind]} template name`}
+          value={templateName}
+          onChange={(event) => setTemplateName(event.target.value)}
+        />
+      </label>
+      <button type="button" className={`secondary-button self-end ${accentClass}`} disabled={currentRows.length === 0} onClick={saveTemplate}>
+        <Save size={16} /> Save
+      </button>
+      <button
+        type="button"
+        className="secondary-button self-end text-rose-700 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950/30"
+        disabled={currentRows.length === 0}
+        onClick={onClear}
+      >
+        <Trash2 size={16} /> Clear All
+      </button>
+    </div>
+  );
+}
+
 function SummaryToggle({
   active,
   label,
@@ -1255,9 +1373,13 @@ function SummaryToggle({
 }
 
 function SavingsCard({
+  rowPresets,
+  saveRowPreset,
   savingsSources,
   updateState,
 }: {
+  rowPresets: RowPreset[];
+  saveRowPreset: (kind: RowPresetKind, name: string, items: RowPresetItem[]) => void;
   savingsSources: SavingsAccount[];
   updateState: (updater: (previous: PlannerState) => PlannerState) => void;
 }) {
@@ -1295,6 +1417,20 @@ function SavingsCard({
           <Plus size={16} /> Add
         </button>
       </div>
+      <RowPresetControls
+        currentRows={savingsSources}
+        kind="savings"
+        onApply={(preset) =>
+          updateState((previous) => ({
+            ...previous,
+            savingsSources: cloneRowPresetItems('savings', preset.items) as SavingsAccount[],
+          }))
+        }
+        onClear={() => updateState((previous) => ({ ...previous, savingsSources: [] }))}
+        onSave={(name) => saveRowPreset('savings', name, savingsSources)}
+        presets={rowPresets}
+        tone="blue"
+      />
       <div className="divide-y divide-slate-200 dark:divide-slate-800">
         {savingsSources.map((source, index) => (
           <div key={source.id} className={`grid gap-3 p-4 md:grid-cols-[1fr_110px_130px_40px] md:items-center ${index % 2 === 1 ? 'bg-blue-50/55 dark:bg-blue-950/20' : 'bg-white dark:bg-slate-900'}`}>
@@ -1334,8 +1470,12 @@ function EditableTable({
   savingsSources = [],
   state,
   addItem,
+  clearItems,
   updateItem,
   removeItem,
+  replaceItems,
+  rowPresets,
+  saveRowPreset,
 }: {
   title: string;
   icon: React.ReactNode;
@@ -1346,8 +1486,12 @@ function EditableTable({
   savingsSources?: SavingsAccount[];
   state?: PlannerState;
   addItem: (type: 'funding' | 'expense') => void;
+  clearItems: (type: 'funding' | 'expense') => void;
   updateItem: (type: 'funding' | 'expense', id: string, patch: Partial<MoneyItem & ExpenseItem>) => void;
   removeItem: (type: 'funding' | 'expense', id: string) => void;
+  replaceItems: (type: 'funding' | 'expense', items: RowPresetItem[]) => void;
+  rowPresets: RowPreset[];
+  saveRowPreset: (kind: RowPresetKind, name: string, items: RowPresetItem[]) => void;
 }) {
   const linkedSavingsAccounts = savingsSources.filter((source) => source.type === 'RESP' || source.type === 'Savings');
   const brandedHeader =
@@ -1369,6 +1513,15 @@ function EditableTable({
           <Plus size={16} /> Add
         </button>
       </div>
+      <RowPresetControls
+        currentRows={items}
+        kind={type === 'funding' ? 'funding' : 'expenses'}
+        onApply={(preset) => replaceItems(type, preset.items)}
+        onClear={() => clearItems(type)}
+        onSave={(name) => saveRowPreset(type === 'funding' ? 'funding' : 'expenses', name, items)}
+        presets={rowPresets}
+        tone={type === 'funding' ? 'blue' : 'orange'}
+      />
       <div className="divide-y divide-slate-200 dark:divide-slate-800">
         {items.map((item, index) => {
           const expense = 'totalAmount' in item;
@@ -1496,10 +1649,12 @@ function EditableTable({
 }
 
 function SplitterTab({
+  saveRowPreset,
   state,
   splitGap,
   updateState,
 }: {
+  saveRowPreset: (kind: RowPresetKind, name: string, items: RowPresetItem[]) => void;
   state: PlannerState;
   splitGap: number;
   updateState: (updater: (previous: PlannerState) => PlannerState) => void;
@@ -1515,6 +1670,20 @@ function SplitterTab({
             <Plus size={16} /> Add
           </button>
         </div>
+        <RowPresetControls
+          currentRows={state.households}
+          kind="households"
+          onApply={(preset) =>
+            updateState((previous) => ({
+              ...previous,
+              households: cloneRowPresetItems('households', preset.items) as PlannerState['households'],
+            }))
+          }
+          onClear={() => updateState((previous) => ({ ...previous, households: [] }))}
+          onSave={(name) => saveRowPreset('households', name, state.households)}
+          presets={getRowPresets(state, 'households')}
+          tone="blue"
+        />
         <div className="space-y-4 p-5">
           {state.households.map((household, index) => (
             <div key={household.id} className={`rounded-lg border border-slate-200 p-4 dark:border-slate-800 ${index % 2 === 1 ? 'bg-blue-50/55 dark:bg-blue-950/20' : 'bg-white dark:bg-slate-900'}`}>
@@ -1609,10 +1778,12 @@ function DeadlinesTab({
   state,
   updateState,
   exportCalendar,
+  saveRowPreset,
 }: {
   state: PlannerState;
   updateState: (updater: (previous: PlannerState) => PlannerState) => void;
   exportCalendar: () => void;
+  saveRowPreset: (kind: RowPresetKind, name: string, items: RowPresetItem[]) => void;
 }) {
   const addDeadline = () => {
     updateState((previous) => ({
@@ -1646,6 +1817,20 @@ function DeadlinesTab({
           </button>
         </div>
       </div>
+      <RowPresetControls
+        currentRows={state.deadlines}
+        kind="deadlines"
+        onApply={(preset) =>
+          updateState((previous) => ({
+            ...previous,
+            deadlines: cloneRowPresetItems('deadlines', preset.items) as DeadlineEvent[],
+          }))
+        }
+        onClear={() => updateState((previous) => ({ ...previous, deadlines: [] }))}
+        onSave={(name) => saveRowPreset('deadlines', name, state.deadlines)}
+        presets={getRowPresets(state, 'deadlines')}
+        tone="orange"
+      />
       <div className="divide-y divide-slate-200 dark:divide-slate-800">
         {state.deadlines.map((deadline, index) => (
           <div key={deadline.id} className={`grid gap-3 p-4 md:grid-cols-[auto_1fr_160px_150px_40px] md:items-center ${index % 2 === 1 ? 'bg-orange-50/60 dark:bg-orange-950/20' : 'bg-white dark:bg-slate-900'}`}>
@@ -2265,9 +2450,9 @@ function OnboardingWizard({
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-6xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950">
-        <div className="grid max-h-[92vh] overflow-hidden lg:grid-cols-[320px_1fr]">
+    <main className="min-h-screen bg-slate-100 p-4 dark:bg-slate-950 md:p-6">
+      <div className="mx-auto w-full max-w-7xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950">
+        <div className="grid min-h-[calc(100vh-2rem)] overflow-hidden lg:grid-cols-[320px_1fr] md:min-h-[calc(100vh-3rem)]">
           <aside className="bg-otu-blue p-6 text-white">
             <div className="flex items-center justify-between">
               <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-otu-orange shadow-lg">
@@ -2276,7 +2461,7 @@ function OnboardingWizard({
               <button
                 type="button"
                 className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-white/20 bg-white/10 text-white hover:bg-white/20"
-                aria-label="Close wizard"
+                aria-label="Exit wizard"
                 onClick={onClose}
               >
                 <X size={16} />
@@ -2380,7 +2565,7 @@ function OnboardingWizard({
           </section>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
 

@@ -60,6 +60,19 @@ export interface DeadlineEvent {
   completed: boolean;
 }
 
+export type RowPresetKind = 'savings' | 'funding' | 'expenses' | 'households' | 'deadlines';
+
+export type RowPresetItem = SavingsAccount | MoneyItem | ExpenseItem | Household | DeadlineEvent;
+
+export interface RowPreset {
+  id: string;
+  kind: RowPresetKind;
+  name: string;
+  items: RowPresetItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ProgramKey = string;
 
 export interface ProgramPreset {
@@ -101,6 +114,7 @@ export interface PlannerState {
   savingsSources: SavingsAccount[];
   households: Household[];
   deadlines: DeadlineEvent[];
+  rowPresets: RowPreset[];
   config: PlannerConfig;
   wizardCompleted: boolean;
   updatedAt: string;

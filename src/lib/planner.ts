@@ -9,6 +9,7 @@ import type {
   PlannerConfig,
   PlannerState,
   ProgramKey,
+  RowPreset,
   Term,
   TermTotals,
   YearBudget,
@@ -123,6 +124,60 @@ const normalizeExpenseItems = (items: ExpenseItem[] = [], term: Term): ExpenseIt
       amountBasis: 'semester' as const,
     };
   });
+
+const createDefaultRowPresets = (): RowPreset[] => {
+  const firstYear = createInitialYearBudget(1);
+  const now = new Date().toISOString();
+
+  return [
+    {
+      id: 'preset-savings-starter',
+      kind: 'savings',
+      name: 'Starter RESP + Savings',
+      items: [
+        { id: 'preset-resp', name: 'Family RESP Account', amount: 25000, type: 'RESP' },
+        { id: 'preset-savings', name: 'Education Savings', amount: 5000, type: 'Savings' },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 'preset-funding-balanced',
+      kind: 'funding',
+      name: 'RESP, OSAP, Scholarship, Work',
+      items: firstYear.fundingSources,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 'preset-expenses-campus',
+      kind: 'expenses',
+      name: 'Campus Year Essentials',
+      items: firstYear.expenses,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 'preset-households-two',
+      kind: 'households',
+      name: 'Two Equal Households',
+      items: [
+        { id: 'preset-household-1', name: 'Household 1', ratio: 50 },
+        { id: 'preset-household-2', name: 'Household 2', ratio: 50 },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 'preset-deadlines-standard',
+      kind: 'deadlines',
+      name: 'Ontario Tech Deadline Starter',
+      items: defaultDeadlines,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+};
 
 export const createInitialYearBudget = (
   yearNum: number,
@@ -318,6 +373,7 @@ export const createInitialPlannerState = (): PlannerState => ({
     { id: 'h-dad', name: 'Household 2', ratio: 50 },
   ],
   deadlines: defaultDeadlines,
+  rowPresets: createDefaultRowPresets(),
   config: defaultPlannerConfig,
   wizardCompleted: false,
   updatedAt: new Date().toISOString(),
@@ -352,6 +408,7 @@ export const hydratePlannerState = (partial: Partial<PlannerState>): PlannerStat
     ...partial,
     config,
     yearlyBudgets,
+    rowPresets: partial.rowPresets && partial.rowPresets.length > 0 ? partial.rowPresets : base.rowPresets,
     wizardCompleted: partial.wizardCompleted ?? false,
   };
 };
