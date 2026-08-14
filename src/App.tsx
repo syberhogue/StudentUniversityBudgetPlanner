@@ -44,6 +44,7 @@ import {
   getBudgetLists,
   getExpenseKey,
   getFundingKey,
+  getSavingsAccountOpeningBalance,
   normalizeHouseholdRatios,
   removeHousehold,
 } from './lib/planner';
@@ -71,12 +72,14 @@ import type {
   PlannerConfig,
   PlannerState,
   ProgramKey,
+  SavingsAccount,
   Term,
   YearBudget,
 } from './types';
 
 type Route = 'landing' | 'auth' | 'app' | 'share';
 type DashboardTab = 'budget' | 'split' | 'degree' | 'deadlines' | 'admin';
+type BudgetCard = 'savings' | 'funding' | 'expenses';
 
 const getRoute = (): { route: Route; token?: string } => {
   const path = window.location.pathname;
@@ -180,7 +183,7 @@ function LandingPage({ navigate }: { navigate: (path: string) => void }) {
   const [housing, setHousing] = useState<keyof typeof housingPresets>('on-campus');
   const [resp, setResp] = useState(8500);
   const teaserBudget = createInitialYearBudget(1, 3, program, housing);
-  const teaserTotal = teaserBudget.expenses.reduce((sum, expense) => sum + expense.totalAmount, 0);
+  const teaserTotal = calculateTermTotals(teaserBudget, 'academic').totalExpensesCost;
   const teaserAid = teaserBudget.fundingSources.reduce((sum, source) => sum + source.amount, 0) + resp - 8500;
 
   return (
@@ -403,6 +406,7 @@ function AuthPage({ navigate }: { navigate: (path: string) => void }) {
 function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
   const [state, setState] = useState<PlannerState>(() => loadLocalPlan());
   const [tab, setTab] = useState<DashboardTab>('budget');
+  const [activeBudgetCard, setActiveBudgetCard] = useState<BudgetCard>('funding');
   const [darkMode, setDarkMode] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
   const [saved, setSaved] = useState(false);
   const [shareUrl, setShareUrl] = useState('');
@@ -416,6 +420,7 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
   const activeTerm = budget.planningMode === 'standard' && (state.activeTerm === 'fall' || state.activeTerm === 'winter') ? 'academic' : state.activeTerm;
   const lists = getBudgetLists(budget, activeTerm);
   const totals = useMemo(() => calculateTermTotals(budget, activeTerm), [budget, activeTerm]);
+  const selectedYearTotals = useMemo(() => calculateTermTotals(budget, 'academic'), [budget]);
   const degree = useMemo(() => calculateDegreeAnalysis(state), [state]);
 
   useEffect(() => {
@@ -487,7 +492,7 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
       const key = getExpenseKey(activeTerm);
       return {
         ...current,
-        [key]: [...current[key], { id: uid('expense'), name: 'New expense', totalAmount: 0, coveredByOthers: 0, category: 'Lifestyle' }],
+        [key]: [...current[key], { id: uid('expense'), name: 'New expense', totalAmount: 0, coveredByOthers: 0, category: 'Lifestyle', amountBasis: 'semester' }],
       };
     });
   };
@@ -757,22 +762,38 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
           </div>
         )}
 
-        {tab === 'budget' && (
-          <BudgetTab
+        {(tab === 'budget' || tab === 'split' || tab === 'deadlines') && (
+          <PlannerControls
+            activeBudgetCard={activeBudgetCard}
             activeTerm={activeTerm}
             budget={budget}
-            lists={lists}
-            totals={totals}
             selectedYear={state.selectedYear}
+            setActiveBudgetCard={setActiveBudgetCard}
+            setTab={setTab}
             setTerm={setTerm}
+            state={state}
+            tab={tab}
+            splitGap={selectedYearTotals.netStudentDeficit}
+            totals={totals}
             updateBudget={updateBudget}
+            updateState={updateState}
+          />
+        )}
+
+        {tab === 'budget' && (
+          <BudgetTab
+            activeBudgetCard={activeBudgetCard}
+            lists={lists}
+            state={state}
+            selectedYear={state.selectedYear}
+            updateState={updateState}
             addItem={addItem}
             updateItem={updateItem}
             removeItem={removeItem}
           />
         )}
-        {tab === 'split' && <SplitterTab state={state} totals={totals} updateState={updateState} />}
-        {tab === 'degree' && <DegreeTab state={state} degree={degree} updateState={updateState} />}
+        {tab === 'split' && <SplitterTab state={state} splitGap={selectedYearTotals.netStudentDeficit} updateState={updateState} />}
+        {tab === 'degree' && <DegreeTab state={state} degree={degree} />}
         {tab === 'deadlines' && <DeadlinesTab state={state} updateState={updateState} exportCalendar={exportCalendar} />}
         {tab === 'admin' && isAdmin && <AdminTab state={state} updateState={updateState} setTab={setTab} />}
       </main>
@@ -792,90 +813,513 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
   );
 }
 
-function BudgetTab({
+function PlannerControls({
+  activeBudgetCard,
   activeTerm,
   budget,
-  lists,
-  totals,
   selectedYear,
+  setActiveBudgetCard,
+  setTab,
   setTerm,
+  state,
+  tab,
+  splitGap,
+  totals,
   updateBudget,
+  updateState,
+}: {
+  activeBudgetCard: BudgetCard;
+  activeTerm: Term;
+  budget: YearBudget;
+  selectedYear: number;
+  setActiveBudgetCard: (card: BudgetCard) => void;
+  setTab: (tab: DashboardTab) => void;
+  setTerm: (term: Term) => void;
+  state: PlannerState;
+  tab: DashboardTab;
+  splitGap: number;
+  totals: ReturnType<typeof calculateTermTotals>;
+  updateBudget: (year: number, updater: (budget: YearBudget) => YearBudget) => void;
+  updateState: (updater: (previous: PlannerState) => PlannerState) => void;
+}) {
+  const savingsTotal = state.savingsSources.reduce((sum, source) => sum + Number(source.amount || 0), 0);
+  const showBudgetCard = (card: BudgetCard) => {
+    setActiveBudgetCard(card);
+    setTab('budget');
+  };
+
+  return (
+    <div className="mb-6 space-y-6">
+      <section className="grid gap-4 md:grid-cols-4">
+        <SummaryToggle
+          active={tab === 'budget' && activeBudgetCard === 'savings'}
+          label="Savings"
+          value={formatCAD(savingsTotal)}
+          tone="blue"
+          onClick={() => showBudgetCard('savings')}
+        />
+        <SummaryToggle
+          active={tab === 'budget' && activeBudgetCard === 'funding'}
+          label="Aid & Income"
+          value={formatCAD(totals.totalFunding)}
+          tone="green"
+          onClick={() => showBudgetCard('funding')}
+        />
+        <SummaryToggle
+          active={tab === 'budget' && activeBudgetCard === 'expenses'}
+          label="My Expenses"
+          value={formatCAD(totals.myShareExpenses)}
+          tone="orange"
+          onClick={() => showBudgetCard('expenses')}
+        />
+        <HouseholdSplitSummaryCard
+          active={tab === 'split'}
+          households={state.households}
+          totalGap={splitGap}
+          onClick={() => setTab('split')}
+        />
+      </section>
+
+      <section className="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-3 shadow-soft dark:border-slate-800 dark:bg-slate-900 xl:flex-row xl:items-center xl:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Budget Period</p>
+          <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">Select which year and period the planner views should use.</p>
+        </div>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
+          <div className="flex flex-wrap gap-1.5">
+            {Array.from({ length: state.degreeYearsCount }, (_, index) => index + 1).map((year) => (
+              <button
+                key={year}
+                type="button"
+                className={`inline-flex h-9 min-w-10 items-center justify-center rounded-md px-3 text-sm font-black transition ${
+                  selectedYear === year
+                    ? 'bg-otu-blue text-white shadow-sm'
+                    : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
+                }`}
+                aria-pressed={selectedYear === year}
+                onClick={() => updateState((previous) => ({ ...previous, selectedYear: year }))}
+              >
+                Y{year}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { label: 'Academic Year (8 mo)', term: 'academic' as Term, mode: 'standard' as YearBudget['planningMode'] },
+              { label: 'Fall', term: 'fall' as Term, mode: 'semester' as YearBudget['planningMode'] },
+              { label: 'Winter', term: 'winter' as Term, mode: 'semester' as YearBudget['planningMode'] },
+              { label: 'Summer', term: 'summer' as Term, mode: budget.planningMode },
+            ].map((option) => (
+              <button
+                key={option.term}
+                type="button"
+                className={activeTerm === option.term ? 'primary-button' : 'secondary-button'}
+                onClick={() => {
+                  if (option.term !== 'summer') {
+                    updateBudget(selectedYear, (current) => ({ ...current, planningMode: option.mode }));
+                  }
+                  setTerm(option.term);
+                }}
+              >
+                {option.term === 'summer' && <Sun size={16} />}
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function BudgetTab({
+  activeBudgetCard,
+  lists,
+  state,
+  selectedYear,
+  updateState,
   addItem,
   updateItem,
   removeItem,
 }: {
-  activeTerm: Term;
-  budget: YearBudget;
+  activeBudgetCard: BudgetCard;
   lists: { funding: MoneyItem[]; expenses: ExpenseItem[] };
-  totals: ReturnType<typeof calculateTermTotals>;
+  state: PlannerState;
   selectedYear: number;
-  setTerm: (term: Term) => void;
-  updateBudget: (year: number, updater: (budget: YearBudget) => YearBudget) => void;
+  updateState: (updater: (previous: PlannerState) => PlannerState) => void;
   addItem: (type: 'funding' | 'expense') => void;
   updateItem: (type: 'funding' | 'expense', id: string, patch: Partial<MoneyItem & ExpenseItem>) => void;
   removeItem: (type: 'funding' | 'expense', id: string) => void;
 }) {
   return (
-    <div className="space-y-6">
-      <section className="grid gap-4 md:grid-cols-4">
-        <Stat label="Term Net" value={formatCAD(Math.abs(totals.totalFunding - totals.myShareExpenses))} tone={totals.myShareExpenses > totals.totalFunding ? 'red' : 'green'} />
-        <Stat label="Aid & Income" value={formatCAD(totals.totalFunding)} tone="green" />
-        <Stat label="My Expenses" value={formatCAD(totals.myShareExpenses)} tone="orange" />
-        <Stat label="Parent Gap" value={formatCAD(totals.netStudentDeficit)} tone="red" />
-      </section>
+    <section className="grid gap-6">
+        {activeBudgetCard === 'savings' && (
+          <SavingsCard
+            savingsSources={state.savingsSources}
+            updateState={updateState}
+          />
+        )}
+        {activeBudgetCard === 'funding' && (
+          <EditableTable
+            title="Income & Aid"
+            icon={<Landmark size={18} />}
+            items={lists.funding}
+            type="funding"
+            categories={incomeCategories}
+            selectedYear={selectedYear}
+            savingsSources={state.savingsSources}
+            state={state}
+            addItem={addItem}
+            updateItem={updateItem}
+            removeItem={removeItem}
+          />
+        )}
+        {activeBudgetCard === 'expenses' && (
+          <EditableTable
+            title="Expenses"
+            icon={<Wallet size={18} />}
+            items={lists.expenses}
+            type="expense"
+            categories={expenseCategories}
+            addItem={addItem}
+            updateItem={updateItem}
+            removeItem={removeItem}
+          />
+        )}
+    </section>
+  );
+}
 
-      <section className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-soft dark:border-slate-800 dark:bg-slate-900 md:flex-row md:items-center md:justify-between">
-        <div>
-          <p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Budget Period</p>
-          <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">Select which period the income and expenses below should edit.</p>
+function AnalyzeCard({
+  degree,
+  state,
+}: {
+  degree: ReturnType<typeof calculateDegreeAnalysis>;
+  state: PlannerState;
+}) {
+  const palette = ['#003C71', '#E75D2A', '#00A3E0', '#10B981', '#8B5CF6', '#E11D48'];
+  const getAnalysisFunding = (budget: YearBudget) => [
+    ...(budget.planningMode === 'semester' ? [...budget.fallFundingSources, ...budget.winterFundingSources] : budget.fundingSources),
+    ...budget.summerFundingSources,
+  ];
+  const linkedAccountFor = (source: MoneyItem) =>
+    source.savingsSourceId
+      ? state.savingsSources.find((account) => account.id === source.savingsSourceId) ?? state.savingsSources[0]
+      : state.savingsSources[0];
+
+  const rows = degree.yearlyBreakdowns.map((year) => {
+    const budget = state.yearlyBudgets[year.yearNum] ?? createInitialYearBudget(year.yearNum, state.tuitionInflationRate, 'healthSci', 'off-campus', state.config);
+    const funding = getAnalysisFunding(budget);
+    const savingsDraws = state.savingsSources.map((account) => ({
+      id: account.id,
+      label: account.name,
+      amount: funding
+        .filter((source) => source.category === 'RESP/Savings' && linkedAccountFor(source)?.id === account.id)
+        .reduce((sum, source) => sum + Number(source.amount || 0), 0),
+    }));
+    const governmentAid = funding
+      .filter((source) => source.category === 'Government Aid')
+      .reduce((sum, source) => sum + Number(source.amount || 0), 0);
+    const householdContributions = state.households.map((household) => ({
+      id: household.id,
+      label: household.name,
+      amount: year.parentCoverageNeeded * (household.ratio / 100),
+    }));
+    const total = savingsDraws.reduce((sum, item) => sum + item.amount, 0) + governmentAid + year.parentCoverageNeeded;
+
+    return {
+      year,
+      governmentAid,
+      householdContributions,
+      savingsDraws,
+      total,
+    };
+  });
+  const maxYearTotal = Math.max(1, ...rows.map((row) => row.total));
+  const totalGovernmentAid = rows.reduce((sum, row) => sum + row.governmentAid, 0);
+  const totalSavingsDraw = degree.grandTotalRespDrawn + degree.grandTotalSavingsDrawn;
+
+  return (
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950">
+      <div className="grid lg:grid-cols-[310px_1fr]">
+        <aside className="bg-otu-blue p-6 text-white">
+          <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-otu-orange shadow-lg">
+            <Sparkles size={25} />
+          </div>
+          <p className="mt-8 text-xs font-black uppercase tracking-[0.22em] text-otu-sky">Degree Analysis</p>
+          <h2 className="mt-3 text-3xl font-black leading-tight">Funding path across the full plan.</h2>
+          <div className="mt-6 grid gap-3">
+            <div className="rounded-lg bg-white/10 p-4">
+              <p className="text-xs font-black uppercase text-otu-sky">Expenses Less Income & Aid</p>
+              <p className="mt-1 text-2xl font-black">{formatCAD(degree.grandTotalParentSupportNeeded)}</p>
+            </div>
+            <div className="rounded-lg bg-white/10 p-4">
+              <p className="text-xs font-black uppercase text-otu-sky">Savings Drawn</p>
+              <p className="mt-1 text-xl font-black">{formatCAD(totalSavingsDraw)}</p>
+            </div>
+            <div className="rounded-lg bg-white/10 p-4">
+              <p className="text-xs font-black uppercase text-otu-sky">Government Aid</p>
+              <p className="mt-1 text-xl font-black">{formatCAD(totalGovernmentAid)}</p>
+            </div>
+          </div>
+        </aside>
+
+        <div className="bg-slate-50 p-5 dark:bg-slate-950 md:p-7">
+          <div className="flex flex-wrap gap-3 text-xs font-bold text-slate-600 dark:text-slate-300">
+            <span className="inline-flex items-center gap-2">
+              <span className="h-3 w-3 rounded-sm bg-otu-blue" /> Savings account draw
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <span className="h-3 w-3 rounded-sm bg-otu-orange" /> Household contribution
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <span className="h-3 w-3 rounded-sm bg-emerald-500" /> Government aid
+            </span>
+          </div>
+
+          <div className="mt-6 space-y-5">
+            {rows.map((row) => (
+              <div key={row.year.yearNum} className="rounded-lg border border-slate-200 bg-white p-4 shadow-soft dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Year {row.year.yearNum}</p>
+                    <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">
+                      Cost {formatCAD(row.year.totalCost)} | Gap {formatCAD(row.year.parentCoverageNeeded)}
+                    </p>
+                  </div>
+                  <p className="text-lg font-black text-otu-blue dark:text-otu-sky">{formatCAD(row.total)}</p>
+                </div>
+
+                <div className="mt-4 h-8 overflow-hidden rounded-md bg-slate-100 dark:bg-slate-800">
+                  <div className="flex h-full" style={{ width: `${Math.max(4, (row.total / maxYearTotal) * 100)}%` }}>
+                    {row.savingsDraws.map((draw, index) =>
+                      draw.amount > 0 ? (
+                        <div
+                          key={draw.id}
+                          title={`${draw.label}: ${formatCAD(draw.amount)}`}
+                          style={{
+                            backgroundColor: palette[index % palette.length],
+                            width: `${(draw.amount / row.total) * 100}%`,
+                          }}
+                        />
+                      ) : null,
+                    )}
+                    {row.householdContributions.map((contribution, index) =>
+                      contribution.amount > 0 ? (
+                        <div
+                          key={contribution.id}
+                          title={`${contribution.label}: ${formatCAD(contribution.amount)}`}
+                          style={{
+                            backgroundColor: palette[(index + 1) % palette.length],
+                            width: `${(contribution.amount / row.total) * 100}%`,
+                          }}
+                        />
+                      ) : null,
+                    )}
+                    {row.governmentAid > 0 && (
+                      <div
+                        title={`Government aid: ${formatCAD(row.governmentAid)}`}
+                        className="bg-emerald-500"
+                        style={{ width: `${(row.governmentAid / row.total) * 100}%` }}
+                      />
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                  <div className="rounded-md bg-blue-50 p-3 dark:bg-blue-950/30">
+                    <p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Savings Draw</p>
+                    {row.savingsDraws.some((draw) => draw.amount > 0) ? (
+                      row.savingsDraws
+                        .filter((draw) => draw.amount > 0)
+                        .map((draw) => (
+                          <p key={draw.id} className="mt-1 flex justify-between gap-3 text-sm font-bold">
+                            <span className="truncate">{draw.label}</span>
+                            <span>{formatCAD(draw.amount)}</span>
+                          </p>
+                        ))
+                    ) : (
+                      <p className="mt-1 text-sm font-semibold text-slate-500">No draw</p>
+                    )}
+                  </div>
+                  <div className="rounded-md bg-orange-50 p-3 dark:bg-orange-950/30">
+                    <p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Households</p>
+                    {row.householdContributions.map((contribution) => (
+                      <p key={contribution.id} className="mt-1 flex justify-between gap-3 text-sm font-bold">
+                        <span className="truncate">{contribution.label}</span>
+                        <span>{formatCAD(contribution.amount)}</span>
+                      </p>
+                    ))}
+                  </div>
+                  <div className="rounded-md bg-emerald-50 p-3 dark:bg-emerald-950/25">
+                    <p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Government Aid</p>
+                    <p className="mt-1 text-sm font-black text-emerald-700 dark:text-emerald-300">{formatCAD(row.governmentAid)}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {[
-            { label: 'Academic Year (8 mo)', term: 'academic' as Term, mode: 'standard' as YearBudget['planningMode'] },
-            { label: 'Fall', term: 'fall' as Term, mode: 'semester' as YearBudget['planningMode'] },
-            { label: 'Winter', term: 'winter' as Term, mode: 'semester' as YearBudget['planningMode'] },
-            { label: 'Summer', term: 'summer' as Term, mode: budget.planningMode },
-          ].map((option) => (
-            <button
-              key={option.term}
-              type="button"
-              className={activeTerm === option.term ? 'primary-button' : 'secondary-button'}
-              onClick={() => {
-                if (option.term !== 'summer') {
-                  updateBudget(selectedYear, (current) => ({ ...current, planningMode: option.mode }));
-                }
-                setTerm(option.term);
-              }}
-            >
-              {option.term === 'summer' && <Sun size={16} />}
-              {option.label}
+      </div>
+    </section>
+  );
+}
+
+function HouseholdSplitSummaryCard({
+  active,
+  households,
+  onClick,
+  totalGap,
+}: {
+  active: boolean;
+  households: PlannerState['households'];
+  onClick: () => void;
+  totalGap: number;
+}) {
+  const colors = ['bg-otu-blue', 'bg-otu-orange', 'bg-otu-sky', 'bg-emerald-500'];
+
+  return (
+    <button
+      type="button"
+      className={`panel p-4 text-left transition hover:-translate-y-0.5 hover:border-otu-sky hover:shadow-lg ${
+        active ? 'ring-2 ring-otu-orange/25' : 'opacity-70'
+      }`}
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      <span className="flex items-center justify-between gap-3">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Household Split</span>
+        <span className={`rounded-full px-2 py-1 text-[11px] font-black ${active ? 'bg-orange-100 text-otu-orange dark:bg-orange-950/40' : 'bg-slate-100 text-slate-500 dark:bg-slate-800'}`}>
+          {active ? 'Active' : 'View'}
+        </span>
+      </span>
+      <span className="mt-2 block text-2xl font-black text-rose-600">{formatCAD(totalGap)}</span>
+      <span className="mt-3 flex h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+        {households.map((household, index) => (
+          <span
+            key={household.id}
+            className={colors[index % colors.length]}
+            style={{ width: `${Math.max(0, household.ratio)}%` }}
+          />
+        ))}
+      </span>
+      <span className="mt-2 flex flex-wrap gap-1.5">
+        {households.slice(0, 3).map((household) => (
+          <span key={household.id} className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-black text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            {household.ratio}% {formatCAD(totalGap * (household.ratio / 100))}
+          </span>
+        ))}
+      </span>
+    </button>
+  );
+}
+
+function SummaryToggle({
+  active,
+  label,
+  onClick,
+  tone,
+  value,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+  tone: 'blue' | 'green' | 'orange' | 'red';
+  value: string;
+}) {
+  const toneClass = {
+    blue: 'text-otu-blue dark:text-otu-sky',
+    green: 'text-emerald-600',
+    orange: 'text-otu-orange',
+    red: 'text-rose-600',
+  }[tone];
+
+  return (
+    <button
+      type="button"
+      className={`panel p-4 text-left transition hover:-translate-y-0.5 hover:border-otu-sky hover:shadow-lg ${
+        active ? 'ring-2 ring-otu-orange/25' : 'opacity-70'
+      }`}
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      <span className="flex items-center justify-between gap-3">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</span>
+        <span className={`rounded-full px-2 py-1 text-[11px] font-black ${active ? 'bg-orange-100 text-otu-orange dark:bg-orange-950/40' : 'bg-slate-100 text-slate-500 dark:bg-slate-800'}`}>
+          {active ? 'Active' : 'View'}
+        </span>
+      </span>
+      <span className={`mt-2 block text-2xl font-black ${toneClass}`}>{value}</span>
+    </button>
+  );
+}
+
+function SavingsCard({
+  savingsSources,
+  updateState,
+}: {
+  savingsSources: SavingsAccount[];
+  updateState: (updater: (previous: PlannerState) => PlannerState) => void;
+}) {
+  const updateSavingsSource = (id: string, patch: Partial<SavingsAccount>) => {
+    updateState((previous) => ({
+      ...previous,
+      savingsSources: previous.savingsSources.map((source) => (source.id === id ? { ...source, ...patch } : source)),
+    }));
+  };
+
+  const addSavingsSource = () => {
+    updateState((previous) => ({
+      ...previous,
+      savingsSources: [
+        ...previous.savingsSources,
+        { id: uid('savings'), name: 'New savings source', amount: 0, type: 'Savings' },
+      ],
+    }));
+  };
+
+  const removeSavingsSource = (id: string) => {
+    updateState((previous) => ({
+      ...previous,
+      savingsSources: previous.savingsSources.filter((source) => source.id !== id),
+    }));
+  };
+
+  return (
+    <div className="panel overflow-hidden">
+      <div className="flex items-center justify-between border-b border-otu-blue bg-otu-blue p-4 text-white">
+        <h2 className="flex items-center gap-2 text-sm font-black">
+          <PiggyBank size={18} /> Savings
+        </h2>
+        <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50" onClick={addSavingsSource}>
+          <Plus size={16} /> Add
+        </button>
+      </div>
+      <div className="divide-y divide-slate-200 dark:divide-slate-800">
+        {savingsSources.map((source, index) => (
+          <div key={source.id} className={`grid gap-3 p-4 md:grid-cols-[1fr_110px_130px_40px] md:items-center ${index % 2 === 1 ? 'bg-blue-50/55 dark:bg-blue-950/20' : 'bg-white dark:bg-slate-900'}`}>
+            <input className="field" value={source.name} onChange={(event) => updateSavingsSource(source.id, { name: event.target.value })} />
+            <select className="field" value={source.type} onChange={(event) => updateSavingsSource(source.id, { type: event.target.value as SavingsAccount['type'] })}>
+              <option value="RESP">RESP</option>
+              <option value="Savings">Savings</option>
+            </select>
+            <input
+              className="field"
+              type="number"
+              value={source.amount}
+              onChange={(event) => updateSavingsSource(source.id, { amount: parseCurrencyInput(event.target.value) })}
+            />
+            <button type="button" className="icon-button" aria-label={`Remove ${source.name}`} onClick={() => removeSavingsSource(source.id)}>
+              <Trash2 size={16} />
             </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="grid gap-6 lg:grid-cols-2">
-        <EditableTable
-          title="Income & Aid"
-          icon={<Landmark size={18} />}
-          items={lists.funding}
-          type="funding"
-          categories={incomeCategories}
-          addItem={addItem}
-          updateItem={updateItem}
-          removeItem={removeItem}
-        />
-        <EditableTable
-          title="Expenses"
-          icon={<Wallet size={18} />}
-          items={lists.expenses}
-          type="expense"
-          categories={expenseCategories}
-          addItem={addItem}
-          updateItem={updateItem}
-          removeItem={removeItem}
-        />
-      </section>
+          </div>
+        ))}
+        {savingsSources.length === 0 && (
+          <div className="p-4 text-sm font-semibold text-slate-500 dark:text-slate-400">
+            Add an RESP, savings account, or other education fund to include it in the degree runway.
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -886,6 +1330,9 @@ function EditableTable({
   items,
   type,
   categories,
+  selectedYear,
+  savingsSources = [],
+  state,
   addItem,
   updateItem,
   removeItem,
@@ -895,10 +1342,14 @@ function EditableTable({
   items: Array<MoneyItem | ExpenseItem>;
   type: 'funding' | 'expense';
   categories: string[];
+  selectedYear?: number;
+  savingsSources?: SavingsAccount[];
+  state?: PlannerState;
   addItem: (type: 'funding' | 'expense') => void;
   updateItem: (type: 'funding' | 'expense', id: string, patch: Partial<MoneyItem & ExpenseItem>) => void;
   removeItem: (type: 'funding' | 'expense', id: string) => void;
 }) {
+  const linkedSavingsAccounts = savingsSources.filter((source) => source.type === 'RESP' || source.type === 'Savings');
   const brandedHeader =
     type === 'funding'
       ? 'border-otu-blue bg-otu-blue text-white'
@@ -921,33 +1372,121 @@ function EditableTable({
       <div className="divide-y divide-slate-200 dark:divide-slate-800">
         {items.map((item, index) => {
           const expense = 'totalAmount' in item;
+          const expenseItem = expense ? item : null;
+          const moneyItem = expense ? null : item;
+          const isSavingsDraw = type === 'funding' && !expense && item.category === 'RESP/Savings';
+          const selectedSavingsAccount =
+            isSavingsDraw && moneyItem
+              ? linkedSavingsAccounts.find((source) => source.id === moneyItem.savingsSourceId) ?? linkedSavingsAccounts[0]
+              : undefined;
+          const openingBalance =
+            state && selectedYear && selectedSavingsAccount
+              ? getSavingsAccountOpeningBalance(state, selectedSavingsAccount.id, selectedYear)
+              : selectedSavingsAccount?.amount ?? 0;
+          const balanceAfterDraw = selectedSavingsAccount && moneyItem ? openingBalance - moneyItem.amount : 0;
           const rowShade =
             index % 2 === 1
               ? type === 'funding'
                 ? 'bg-blue-50/55 dark:bg-blue-950/20'
                 : 'bg-orange-50/60 dark:bg-orange-950/20'
               : 'bg-white dark:bg-slate-900';
+          const rowGridClass = expense
+            ? 'grid gap-3 md:grid-cols-[1fr_130px_130px_130px_40px] md:items-end'
+            : 'grid gap-3 md:grid-cols-[1fr_130px_130px_40px] md:items-center';
+          const semesterAmount = expenseItem ? Number(expenseItem.totalAmount || 0) : 0;
+          const monthlyAmount = semesterAmount / 4;
           return (
-            <div key={item.id} className={`grid gap-3 p-4 md:grid-cols-[1fr_130px_130px_40px] md:items-center ${rowShade}`}>
-              <input className="field" value={item.name} onChange={(event) => updateItem(type, item.id, { name: event.target.value })} />
-              <select className="field" value={item.category} onChange={(event) => updateItem(type, item.id, { category: event.target.value })}>
-                {categories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </select>
-              <input
-                className="field"
-                type="number"
-                value={expense ? item.totalAmount : item.amount}
-                onChange={(event) =>
-                  updateItem(type, item.id, expense ? { totalAmount: parseCurrencyInput(event.target.value) } : { amount: parseCurrencyInput(event.target.value) })
-                }
-              />
-              <button type="button" className="icon-button" aria-label={`Remove ${item.name}`} onClick={() => removeItem(type, item.id)}>
-                <Trash2 size={16} />
-              </button>
+            <div key={item.id} className={`p-4 ${rowShade}`}>
+              <div className={rowGridClass}>
+                <input className="field" value={item.name} onChange={(event) => updateItem(type, item.id, { name: event.target.value })} />
+                <select
+                  className="field"
+                  value={item.category}
+                  onChange={(event) => {
+                    const category = event.target.value;
+                    const patch: Partial<MoneyItem & ExpenseItem> = { category };
+                    if (type === 'funding' && !expense) {
+                      patch.savingsSourceId =
+                        category === 'RESP/Savings' ? moneyItem?.savingsSourceId ?? linkedSavingsAccounts[0]?.id : undefined;
+                    }
+                    updateItem(type, item.id, patch);
+                  }}
+                >
+                  {categories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+                {expenseItem && (
+                  <>
+                    <label className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      Monthly
+                      <input
+                        className="field mt-1"
+                        type="number"
+                        value={monthlyAmount}
+                        onChange={(event) =>
+                          updateItem(type, item.id, { totalAmount: parseCurrencyInput(event.target.value) * 4, amountBasis: 'semester' })
+                        }
+                      />
+                    </label>
+                    <label className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      Semester
+                      <input
+                        className="field mt-1"
+                        type="number"
+                        value={semesterAmount}
+                        onChange={(event) =>
+                          updateItem(type, item.id, { totalAmount: parseCurrencyInput(event.target.value), amountBasis: 'semester' })
+                        }
+                      />
+                    </label>
+                  </>
+                )}
+                {!expenseItem && (
+                  <input
+                    className="field"
+                    type="number"
+                    value={moneyItem?.amount ?? 0}
+                    onChange={(event) => updateItem(type, item.id, { amount: parseCurrencyInput(event.target.value) })}
+                  />
+                )}
+                <button type="button" className="icon-button" aria-label={`Remove ${item.name}`} onClick={() => removeItem(type, item.id)}>
+                  <Trash2 size={16} />
+                </button>
+              </div>
+              {isSavingsDraw && moneyItem && (
+                <div className="mt-3 grid gap-3 rounded-lg border border-blue-200 bg-blue-50/80 p-3 dark:border-blue-900 dark:bg-blue-950/30 md:grid-cols-[1fr_170px_170px] md:items-end">
+                  <label className="text-sm font-bold">
+                    Draw from savings account
+                    <select
+                      className="field mt-1"
+                      value={selectedSavingsAccount?.id ?? ''}
+                      onChange={(event) => updateItem(type, item.id, { savingsSourceId: event.target.value })}
+                    >
+                      {linkedSavingsAccounts.length === 0 && <option value="">No savings accounts yet</option>}
+                      {linkedSavingsAccounts.map((source) => (
+                        <option key={source.id} value={source.id}>
+                          {source.name} ({source.type})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="rounded-md bg-white p-3 dark:bg-slate-900">
+                    <p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Year {selectedYear ?? ''} Start</p>
+                    <p className="mt-1 text-lg font-black text-otu-blue dark:text-otu-sky">
+                      {selectedSavingsAccount ? formatCAD(openingBalance) : formatCAD(0)}
+                    </p>
+                  </div>
+                  <div className="rounded-md bg-white p-3 dark:bg-slate-900">
+                    <p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">After Draw</p>
+                    <p className={`mt-1 text-lg font-black ${balanceAfterDraw < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      {selectedSavingsAccount ? formatCAD(balanceAfterDraw) : formatCAD(0)}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}
@@ -958,11 +1497,11 @@ function EditableTable({
 
 function SplitterTab({
   state,
-  totals,
+  splitGap,
   updateState,
 }: {
   state: PlannerState;
-  totals: ReturnType<typeof calculateTermTotals>;
+  splitGap: number;
   updateState: (updater: (previous: PlannerState) => PlannerState) => void;
 }) {
   return (
@@ -1025,7 +1564,7 @@ function SplitterTab({
         </div>
         <div className="grid gap-3 p-5">
           {state.households.map((household, index) => {
-            const share = totals.netStudentDeficit * (household.ratio / 100);
+            const share = splitGap * (household.ratio / 100);
             return (
               <div key={household.id} className={`rounded-lg border border-slate-200 p-4 dark:border-slate-800 ${index % 2 === 1 ? 'bg-orange-50/60 dark:bg-orange-950/20' : 'bg-white dark:bg-slate-900'}`}>
                 <div className="flex items-center justify-between">
@@ -1049,11 +1588,9 @@ function SplitterTab({
 function DegreeTab({
   state,
   degree,
-  updateState,
 }: {
   state: PlannerState;
   degree: ReturnType<typeof calculateDegreeAnalysis>;
-  updateState: (updater: (previous: PlannerState) => PlannerState) => void;
 }) {
   return (
     <div className="space-y-6">
@@ -1063,37 +1600,7 @@ function DegreeTab({
         <Stat label="RESP Drawn" value={formatCAD(degree.grandTotalRespDrawn)} tone="orange" />
         <Stat label="Parent Gap" value={formatCAD(degree.grandTotalParentSupportNeeded)} tone="red" />
       </section>
-      <section className="panel overflow-hidden">
-        <div className="bg-otu-blue p-4 text-white">
-          <h2 className="text-lg font-black">RESP & Savings Runway</h2>
-        </div>
-        <div className="divide-y divide-slate-200 dark:divide-slate-800">
-          {degree.yearlyBreakdowns.map((year, index) => (
-            <button
-              key={year.yearNum}
-              type="button"
-              onClick={() => updateState((previous) => ({ ...previous, selectedYear: year.yearNum }))}
-              className={`grid w-full gap-4 p-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-800 md:grid-cols-[90px_1fr_1fr_1fr] ${
-                state.selectedYear === year.yearNum ? 'bg-blue-100 dark:bg-blue-950/40' : index % 2 === 1 ? 'bg-blue-50/55 dark:bg-blue-950/20' : 'bg-white dark:bg-slate-900'
-              }`}
-            >
-              <div className="flex h-12 w-12 items-center justify-center rounded-md bg-otu-blue font-black text-white">Y{year.yearNum}</div>
-              <div>
-                <p className="text-xs font-bold uppercase text-slate-500">Cost</p>
-                <p className="font-black">{formatCAD(year.totalCost)}</p>
-              </div>
-              <div>
-                <p className="text-xs font-bold uppercase text-slate-500">RESP</p>
-                <p className="font-black text-otu-orange">{formatCAD(year.respStart)} to {formatCAD(year.respEnd)}</p>
-              </div>
-              <div>
-                <p className="text-xs font-bold uppercase text-slate-500">Support</p>
-                <p className="font-black text-rose-600">{formatCAD(year.parentCoverageNeeded)}</p>
-              </div>
-            </button>
-          ))}
-        </div>
-      </section>
+      <AnalyzeCard state={state} degree={degree} />
     </div>
   );
 }
@@ -1506,7 +2013,7 @@ function OnboardingWizard({
   const finish = () => {
     const firstYear = createInitialYearBudget(1, state.tuitionInflationRate, program, livingSituation, config, mealPlan, monthlyGroceries);
     const fundingSources = [
-      { id: 'funding-resp-1', name: 'RESP Draw (EAP + PSE)', amount: Math.min(respAmount, 8500), category: 'RESP/Savings' },
+      { id: 'funding-resp-1', name: 'RESP Draw (EAP + PSE)', amount: Math.min(respAmount, 8500), category: 'RESP/Savings', savingsSourceId: 's-resp' },
       { id: 'funding-osap-1', name: 'OSAP Grants & Loans', amount: osapAmount, category: 'Government Aid' },
       ...(scholarshipAmount > 0 ? [{ id: 'funding-scholarship-1', name: scholarshipName || 'Scholarship', amount: scholarshipAmount, category: 'Scholarships' }] : []),
       ...(partTimeIncome > 0 ? [{ id: 'funding-work-1', name: 'Part-Time Work', amount: partTimeIncome * 8, category: 'Employment' }] : []),
@@ -1545,7 +2052,7 @@ function OnboardingWizard({
   const currentPreview = createInitialYearBudget(1, state.tuitionInflationRate, program, livingSituation, config, mealPlan, monthlyGroceries);
   const selectedProgramPreset = config.programs[currentPreview.program] ?? Object.values(config.programs)[0];
   const selectedHousingPreset = config.housing[currentPreview.livingSituation] ?? Object.values(config.housing)[0];
-  const previewCost = currentPreview.expenses.reduce((sum, expense) => sum + expense.totalAmount, 0);
+  const previewCost = calculateTermTotals(currentPreview, 'academic').totalExpensesCost;
   const previewFunding = Math.min(respAmount, 8500) + osapAmount + scholarshipAmount + partTimeIncome * 8;
   const previewGap = Math.max(0, previewCost - previewFunding);
 

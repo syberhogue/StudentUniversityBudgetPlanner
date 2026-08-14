@@ -1,12 +1,12 @@
-import type { PlannerState, SharePayload } from '../types';
-import { calculateDegreeAnalysis, calculateTermTotals } from './planner';
+import type { PlannerState, SharePayload, Term } from '../types';
+import { calculateDegreeAnalysis, calculateTermTotals, getExpenseEffectiveTotal } from './planner';
 import { formatCAD } from './format';
 
 const csvCell = (value: string | number) => `"${String(value).split('"').join('""')}"`;
 
 export const createPlannerCsv = (state: PlannerState) => {
   const rows = [
-    ['Section', 'Year', 'Term', 'Name', 'Category', 'Amount', 'Covered By Others'],
+    ['Section', 'Year', 'Term', 'Name', 'Category', 'Amount', 'Monthly Amount', 'Semester Amount', 'Period Total', 'Covered By Others'],
   ];
 
   Object.entries(state.yearlyBudgets).forEach(([year, budget]) => {
@@ -17,7 +17,7 @@ export const createPlannerCsv = (state: PlannerState) => {
       ['Income', 'Summer', budget.summerFundingSources],
     ] as const;
     groups.forEach(([section, term, items]) => {
-      items.forEach((item) => rows.push([section, year, term, item.name, item.category, item.amount.toString(), '']));
+      items.forEach((item) => rows.push([section, year, term, item.name, item.category, item.amount.toString(), '', '', item.amount.toString(), '']));
     });
 
     const expenseGroups = [
@@ -35,6 +35,9 @@ export const createPlannerCsv = (state: PlannerState) => {
           item.name,
           item.category,
           item.totalAmount.toString(),
+          Math.round(item.totalAmount / 4).toString(),
+          item.totalAmount.toString(),
+          getExpenseEffectiveTotal(item, term.toLowerCase() as Term).toString(),
           item.coveredByOthers.toString(),
         ]),
       );

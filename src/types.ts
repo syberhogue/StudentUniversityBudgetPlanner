@@ -9,6 +9,7 @@ export interface MoneyItem {
   name: string;
   amount: number;
   category: string;
+  savingsSourceId?: string;
 }
 
 export interface ExpenseItem {
@@ -17,6 +18,7 @@ export interface ExpenseItem {
   totalAmount: number;
   coveredByOthers: number;
   category: string;
+  amountBasis?: 'semester';
 }
 
 export interface YearBudget {

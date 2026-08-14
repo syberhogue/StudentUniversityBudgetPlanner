@@ -99,14 +99,28 @@ const splitMoneyItems = (items: MoneyItem[], term: 'fall' | 'winter') =>
 
 const splitExpenseItems = (items: ExpenseItem[], term: 'fall' | 'winter') =>
   items.map((item) => {
-    const fallAmount = Math.round(item.totalAmount / 2);
     const fallCovered = Math.round(item.coveredByOthers / 2);
     return {
       ...item,
       id: `${item.id}-${term}`,
       name: `${item.name} (${term === 'fall' ? 'Fall' : 'Winter'})`,
-      totalAmount: term === 'fall' ? fallAmount : item.totalAmount - fallAmount,
       coveredByOthers: term === 'fall' ? fallCovered : item.coveredByOthers - fallCovered,
+    };
+  });
+
+const normalizeExpenseItems = (items: ExpenseItem[] = [], term: Term): ExpenseItem[] =>
+  items.map((item) => {
+    if (item.amountBasis === 'semester') return item;
+    const legacyItem = item as ExpenseItem & { isMonthly?: boolean };
+    const totalAmount = legacyItem.isMonthly
+      ? Number(legacyItem.totalAmount || 0) * 4
+      : term === 'academic'
+        ? Math.round(Number(legacyItem.totalAmount || 0) / 2)
+        : Number(legacyItem.totalAmount || 0);
+    return {
+      ...item,
+      totalAmount,
+      amountBasis: 'semester' as const,
     };
   });
 
@@ -133,6 +147,7 @@ export const createInitialYearBudget = (
       name: 'RESP Draw (EAP + PSE)',
       amount: Math.max(3000, Math.round(8500 * Math.pow(0.93, yearNum - 1))),
       category: 'RESP/Savings',
+      savingsSourceId: 's-resp',
     },
     {
       id: `funding-grant-${yearNum}`,
@@ -164,65 +179,74 @@ export const createInitialYearBudget = (
     {
       id: `expense-tuition-${yearNum}`,
       name: `${programPreset.label} Tuition Fees`,
-      totalAmount: Math.round(programPreset.tuition * tuitionMultiplier),
+      totalAmount: Math.round((programPreset.tuition * tuitionMultiplier) / 2),
       coveredByOthers: 0,
       category: 'Academic',
+      amountBasis: 'semester' as const,
     },
     {
       id: `expense-fees-${yearNum}`,
       name: 'Ontario Tech Ancillary & SAFA Fees',
-      totalAmount: Math.round(programPreset.ancillary * tuitionMultiplier),
+      totalAmount: Math.round((programPreset.ancillary * tuitionMultiplier) / 2),
       coveredByOthers: 0,
       category: 'Academic',
+      amountBasis: 'semester' as const,
     },
     {
       id: `expense-books-${yearNum}`,
       name: 'Textbooks, Digital Codes & Software',
-      totalAmount: Math.round(900 * tuitionMultiplier),
+      totalAmount: Math.round((900 * tuitionMultiplier) / 2),
       coveredByOthers: 0,
       category: 'Academic',
+      amountBasis: 'semester' as const,
     },
     {
       id: `expense-housing-${yearNum}`,
       name: housingPreset.label,
-      totalAmount: Math.round(housingPreset.housing * tuitionMultiplier),
+      totalAmount: Math.round((housingPreset.housing * tuitionMultiplier) / 2),
       coveredByOthers: 0,
       category: 'Housing',
+      amountBasis: 'semester' as const,
     },
     {
       id: `expense-food-${yearNum}`,
       name: livingSituation === 'home' ? 'Groceries & Commuter Meals' : 'Meal Plan / Groceries',
-      totalAmount: Math.round(foodCost * tuitionMultiplier),
+      totalAmount: Math.round((foodCost * tuitionMultiplier) / 2),
       coveredByOthers: 0,
       category: 'Food',
+      amountBasis: 'semester' as const,
     },
     {
       id: `expense-utilities-${yearNum}`,
       name: 'Utilities & High-Speed Internet',
-      totalAmount: Math.round(housingPreset.utilities * tuitionMultiplier),
+      totalAmount: Math.round((housingPreset.utilities * tuitionMultiplier) / 2),
       coveredByOthers: 0,
       category: 'Housing',
+      amountBasis: 'semester' as const,
     },
     {
       id: `expense-phone-${yearNum}`,
       name: 'Cell Phone Plan',
-      totalAmount: 520,
+      totalAmount: 260,
       coveredByOthers: 0,
       category: 'Lifestyle',
+      amountBasis: 'semester' as const,
     },
     {
       id: `expense-transit-${yearNum}`,
       name: 'Durham Transit / GO Travel',
-      totalAmount: livingSituation === 'home' ? 1200 : 650,
+      totalAmount: livingSituation === 'home' ? 600 : 325,
       coveredByOthers: 0,
       category: 'Lifestyle',
+      amountBasis: 'semester' as const,
     },
     {
       id: `expense-personal-${yearNum}`,
       name: 'Personal Care & Recreation',
-      totalAmount: livingSituation === 'home' ? 1000 : 1450,
+      totalAmount: livingSituation === 'home' ? 500 : 725,
       coveredByOthers: 0,
       category: 'Lifestyle',
+      amountBasis: 'semester' as const,
     },
   ].filter((item) => item.totalAmount > 0);
 
@@ -249,6 +273,7 @@ export const createInitialYearBudget = (
         totalAmount: livingSituation === 'home' ? 0 : Math.round(housingPreset.housing / 2),
         coveredByOthers: 0,
         category: 'Housing',
+        amountBasis: 'semester' as const,
       },
       {
         id: `summer-food-${yearNum}`,
@@ -256,6 +281,7 @@ export const createInitialYearBudget = (
         totalAmount: Math.round(monthlyGroceries * 4),
         coveredByOthers: 0,
         category: 'Food',
+        amountBasis: 'semester' as const,
       },
       {
         id: `summer-misc-${yearNum}`,
@@ -263,6 +289,7 @@ export const createInitialYearBudget = (
         totalAmount: 900,
         coveredByOthers: 0,
         category: 'Lifestyle',
+        amountBasis: 'semester' as const,
       },
     ].filter((item) => item.totalAmount > 0),
   };
@@ -313,6 +340,10 @@ export const hydratePlannerState = (partial: Partial<PlannerState>): PlannerStat
           ? 'none'
           : firstKey(config.mealPlans, 'none'),
       monthlyGroceries: budget.monthlyGroceries ?? (budget.livingSituation === 'home' ? 250 : 475),
+      expenses: normalizeExpenseItems(budget.expenses, 'academic'),
+      fallExpenses: normalizeExpenseItems(budget.fallExpenses, 'fall'),
+      winterExpenses: normalizeExpenseItems(budget.winterExpenses, 'winter'),
+      summerExpenses: normalizeExpenseItems(budget.summerExpenses, 'summer'),
     };
   });
 
@@ -326,10 +357,12 @@ export const hydratePlannerState = (partial: Partial<PlannerState>): PlannerStat
 };
 
 const sumFunding = (items: MoneyItem[]) => items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-const sumExpenses = (items: ExpenseItem[]) =>
-  items.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0);
-const sumMyShare = (items: ExpenseItem[]) =>
-  items.reduce((sum, item) => sum + Math.max(0, Number(item.totalAmount || 0) - Number(item.coveredByOthers || 0)), 0);
+export const getExpenseEffectiveTotal = (item: ExpenseItem, term: Term) =>
+  Number(item.totalAmount || 0) * (term === 'academic' ? 2 : 1);
+const sumExpenses = (items: ExpenseItem[], term: Term) =>
+  items.reduce((sum, item) => sum + getExpenseEffectiveTotal(item, term), 0);
+const sumMyShare = (items: ExpenseItem[], term: Term) =>
+  items.reduce((sum, item) => sum + Math.max(0, getExpenseEffectiveTotal(item, term) - Number(item.coveredByOthers || 0)), 0);
 
 export const getBudgetLists = (budget: YearBudget, term: Term) => {
   if (term === 'fall') return { funding: budget.fallFundingSources, expenses: budget.fallExpenses };
@@ -352,16 +385,39 @@ export const getExpenseKey = (term: Term) => {
   return 'expenses';
 };
 
+const getSavingsDrawFunding = (budget: YearBudget) => [
+  ...(budget.planningMode === 'semester' ? [...budget.fallFundingSources, ...budget.winterFundingSources] : budget.fundingSources),
+  ...budget.summerFundingSources,
+];
+
+const getLinkedSavingsAccount = (state: PlannerState, source: MoneyItem) =>
+  source.savingsSourceId
+    ? state.savingsSources.find((account) => account.id === source.savingsSourceId) ?? state.savingsSources[0]
+    : state.savingsSources[0];
+
+export const getSavingsAccountOpeningBalance = (state: PlannerState, accountId: string, selectedYear: number) => {
+  const account = state.savingsSources.find((source) => source.id === accountId);
+  if (!account) return 0;
+
+  const priorDraws = Object.entries(state.yearlyBudgets)
+    .filter(([yearNumber]) => Number(yearNumber) < selectedYear)
+    .flatMap(([, budget]) => getSavingsDrawFunding(budget))
+    .filter((source) => source.category === 'RESP/Savings' && getLinkedSavingsAccount(state, source)?.id === accountId)
+    .reduce((sum, source) => sum + Number(source.amount || 0), 0);
+
+  return account.amount - priorDraws;
+};
+
 export const calculateTermTotals = (budget: YearBudget, activeTerm: Term): TermTotals => {
   const fallFunding = sumFunding(budget.fallFundingSources);
-  const fallExpenses = sumMyShare(budget.fallExpenses);
-  const fallTotalExpenses = sumExpenses(budget.fallExpenses);
+  const fallExpenses = sumMyShare(budget.fallExpenses, 'fall');
+  const fallTotalExpenses = sumExpenses(budget.fallExpenses, 'fall');
   const winterFunding = sumFunding(budget.winterFundingSources);
-  const winterExpenses = sumMyShare(budget.winterExpenses);
-  const winterTotalExpenses = sumExpenses(budget.winterExpenses);
+  const winterExpenses = sumMyShare(budget.winterExpenses, 'winter');
+  const winterTotalExpenses = sumExpenses(budget.winterExpenses, 'winter');
   const standardFunding = sumFunding(budget.fundingSources);
-  const standardExpenses = sumMyShare(budget.expenses);
-  const standardTotalExpenses = sumExpenses(budget.expenses);
+  const standardExpenses = sumMyShare(budget.expenses, 'academic');
+  const standardTotalExpenses = sumExpenses(budget.expenses, 'academic');
 
   const academicFunding = budget.planningMode === 'semester' ? fallFunding + winterFunding : standardFunding;
   const academicExpenses = budget.planningMode === 'semester' ? fallExpenses + winterExpenses : standardExpenses;
@@ -369,8 +425,8 @@ export const calculateTermTotals = (budget: YearBudget, activeTerm: Term): TermT
     budget.planningMode === 'semester' ? fallTotalExpenses + winterTotalExpenses : standardTotalExpenses;
 
   const summerFunding = sumFunding(budget.summerFundingSources);
-  const summerExpensesTotal = sumMyShare(budget.summerExpenses);
-  const summerTotalExpenses = sumExpenses(budget.summerExpenses);
+  const summerExpensesTotal = sumMyShare(budget.summerExpenses, 'summer');
+  const summerTotalExpenses = sumExpenses(budget.summerExpenses, 'summer');
   const summerSurplusThisYear = Math.max(0, summerFunding - summerExpensesTotal);
 
   const termValues =
@@ -412,26 +468,35 @@ export const calculateDegreeAnalysis = (state: PlannerState): DegreeAnalysis => 
     const yearNum = index + 1;
     const budget =
       state.yearlyBudgets[yearNum] ?? createInitialYearBudget(yearNum, state.tuitionInflationRate, 'healthSci', 'off-campus', state.config);
-    const academicExpenses =
+    const academicExpenseGroups =
       budget.planningMode === 'semester'
-        ? [...budget.fallExpenses, ...budget.winterExpenses]
-        : budget.expenses;
+        ? [
+            { term: 'fall' as Term, items: budget.fallExpenses },
+            { term: 'winter' as Term, items: budget.winterExpenses },
+          ]
+        : [{ term: 'academic' as Term, items: budget.expenses }];
     const academicFunding =
       budget.planningMode === 'semester'
         ? [...budget.fallFundingSources, ...budget.winterFundingSources]
         : budget.fundingSources;
 
-    const tuitionAndAcademic = academicExpenses
-      .filter((expense) => expense.category === 'Academic')
-      .reduce((sum, expense) => sum + expense.totalAmount, 0);
-    const livingAndFood = academicExpenses
-      .filter((expense) => expense.category === 'Housing' || expense.category === 'Food')
-      .reduce((sum, expense) => sum + expense.totalAmount, 0);
-    const lifestyleAndMisc = academicExpenses
-      .filter((expense) => expense.category !== 'Academic' && expense.category !== 'Housing' && expense.category !== 'Food')
-      .reduce((sum, expense) => sum + expense.totalAmount, 0);
+    const sumAcademicExpenses = (predicate: (expense: ExpenseItem) => boolean) =>
+      academicExpenseGroups.reduce(
+        (sum, group) =>
+          sum +
+          group.items
+            .filter(predicate)
+            .reduce((groupSum, expense) => groupSum + getExpenseEffectiveTotal(expense, group.term), 0),
+        0,
+      );
 
-    const summerCost = sumExpenses(budget.summerExpenses);
+    const tuitionAndAcademic = sumAcademicExpenses((expense) => expense.category === 'Academic');
+    const livingAndFood = sumAcademicExpenses((expense) => expense.category === 'Housing' || expense.category === 'Food');
+    const lifestyleAndMisc = sumAcademicExpenses(
+      (expense) => expense.category !== 'Academic' && expense.category !== 'Housing' && expense.category !== 'Food',
+    );
+
+    const summerCost = sumExpenses(budget.summerExpenses, 'summer');
     const summerIncome = sumFunding(budget.summerFundingSources);
     const summerSurplus = Math.max(0, summerIncome - summerCost);
     if (summerSurplus > 0) {
@@ -442,10 +507,10 @@ export const calculateDegreeAnalysis = (state: PlannerState): DegreeAnalysis => 
     const summerFunding = budget.summerFundingSources;
     const allFunding = [...academicFunding, ...summerFunding];
     const respDraw = allFunding
-      .filter((source) => source.name.toLowerCase().includes('resp'))
+      .filter((source) => source.category === 'RESP/Savings' && getLinkedSavingsAccount(state, source)?.type === 'RESP')
       .reduce((sum, source) => sum + source.amount, 0);
     const personalSavingsDraw = allFunding
-      .filter((source) => source.category === 'RESP/Savings' && !source.name.toLowerCase().includes('resp'))
+      .filter((source) => source.category === 'RESP/Savings' && getLinkedSavingsAccount(state, source)?.type === 'Savings')
       .reduce((sum, source) => sum + source.amount, 0);
     const grantsAndScholarships = allFunding
       .filter((source) => source.category === 'Government Aid' || source.category === 'Scholarships')
