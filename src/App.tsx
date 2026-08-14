@@ -8,6 +8,7 @@ import {
   Home,
   Landmark,
   Link,
+  LogOut,
   Moon,
   PiggyBank,
   Plus,
@@ -20,10 +21,11 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  UserRound,
   Wallet,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { defaultDeadlines, defaultPlannerConfig, expenseCategories, housingPresets, incomeCategories, programPresets } from './data/presets';
 import {
   createDeadlineIcs,
@@ -52,7 +54,9 @@ import {
   createRemoteShare,
   getCurrentUserIsAdmin,
   isSupabaseConfigured,
+  loadCurrentUserProfile,
   loadRemotePlannerConfig,
+  loadRemotePlanSnapshot,
   loadRemoteShare,
   saveRemotePlanSnapshot,
   saveRemotePlannerConfig,
@@ -61,6 +65,7 @@ import {
   signOut,
   signUpWithPassword,
   supabase,
+  updateCurrentUserProfile,
 } from './lib/supabase';
 import type {
   DeadlineEvent,
@@ -82,6 +87,14 @@ import type {
 type Route = 'landing' | 'auth' | 'app' | 'share';
 type DashboardTab = 'budget' | 'split' | 'degree' | 'deadlines' | 'admin';
 type BudgetCard = 'savings' | 'funding' | 'expenses';
+
+interface ProfileFormValues {
+  title: string;
+  studentName: string;
+  studentId: string;
+  academicYear: string;
+  program: ProgramKey;
+}
 
 const rowPresetKindLabels: Record<RowPresetKind, string> = {
   savings: 'Savings',
@@ -186,6 +199,12 @@ const parseDateValue = (date: string) => {
 
 const formatShortDate = (date: string) =>
   new Intl.DateTimeFormat('en-CA', { month: 'short', day: 'numeric' }).format(new Date(`${date}T12:00:00`));
+
+const getExpectedGraduationYear = (academicYear: string, degreeYearsCount: number) => {
+  const startYear = Number(academicYear.match(/\d{4}/)?.[0]);
+  if (!Number.isFinite(startYear)) return null;
+  return startYear + Math.max(1, degreeYearsCount);
+};
 
 const useRouter = () => {
   const [location, setLocation] = useState(getRoute);
@@ -535,7 +554,11 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
   const [shareUrl, setShareUrl] = useState('');
   const [showActionsMenu, setShowActionsMenu] = useState(false);
   const [showWizard, setShowWizard] = useState(() => !loadLocalPlan().wizardCompleted);
-  const [isAdmin, setIsAdmin] = useState(!isSupabaseConfigured);
+  const [showProfile, setShowProfile] = useState(false);
+  const [currentUserEmail, setCurrentUserEmail] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [remoteReady, setRemoteReady] = useState(!isSupabaseConfigured);
+  const [saveError, setSaveError] = useState('');
   const budget =
     state.yearlyBudgets[state.selectedYear] ??
     createInitialYearBudget(state.selectedYear, state.tuitionInflationRate, 'healthSci', 'off-campus', state.config);
@@ -558,18 +581,58 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
 
   useEffect(() => {
     saveLocalPlan(state);
+    if (!remoteReady) return undefined;
     const timer = window.setTimeout(() => void saveRemotePlanSnapshot(state).catch(() => undefined), 750);
     return () => window.clearTimeout(timer);
-  }, [state]);
+  }, [remoteReady, state]);
 
   useEffect(() => {
-    if (isSupabaseConfigured) {
-      void loadRemotePlannerConfig().then((config) => {
-        setState((previous) => ({ ...previous, config }));
+    let cancelled = false;
+
+    const initializeRemoteState = async () => {
+      const config = await loadRemotePlannerConfig();
+      const remotePlan = isSupabaseConfigured ? await loadRemotePlanSnapshot() : null;
+      const profile = isSupabaseConfigured ? await loadCurrentUserProfile() : null;
+      const admin = await getCurrentUserIsAdmin();
+
+      if (cancelled) return;
+      setIsAdmin(admin);
+      setCurrentUserEmail(profile?.email ?? '');
+      setState((previous) => {
+        const basePlan = remotePlan ?? previous;
+        const firstYearBudget = basePlan.yearlyBudgets[1];
+        return {
+          ...basePlan,
+          studentName: basePlan.studentName || profile?.fullName || '',
+          yearlyBudgets:
+            !remotePlan && profile?.studentProgram && firstYearBudget
+              ? {
+                  ...basePlan.yearlyBudgets,
+                  1: { ...firstYearBudget, program: profile.studentProgram },
+                }
+              : basePlan.yearlyBudgets,
+          config,
+        };
       });
-    }
-    void getCurrentUserIsAdmin().then(setIsAdmin);
+      setRemoteReady(true);
+    };
+
+    void initializeRemoteState().catch((error) => {
+      if (cancelled) return;
+      setSaveError(error instanceof Error ? error.message : 'Could not load your saved Supabase plan.');
+      setRemoteReady(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  useEffect(() => {
+    if (tab === 'admin' && !isAdmin) {
+      setTab('budget');
+    }
+  }, [isAdmin, tab]);
 
   const updateState = (updater: (previous: PlannerState) => PlannerState) => {
     setState((previous) => ({ ...updater(previous), updatedAt: new Date().toISOString() }));
@@ -680,9 +743,65 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
 
   const saveNow = async () => {
     saveLocalPlan(state);
-    await saveRemotePlanSnapshot(state).catch(() => undefined);
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1800);
+    try {
+      const remotePlanId = await saveRemotePlanSnapshot(state);
+      if (isSupabaseConfigured && !remotePlanId) {
+        setSaveError('Sign in to save this plan to your Supabase profile.');
+        setSaved(false);
+        return;
+      }
+      setSaveError('');
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1800);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Could not save this plan to Supabase.');
+      setSaved(false);
+    }
+  };
+
+  const saveProfile = async (profile: ProfileFormValues) => {
+    const trimmedName = profile.studentName.trim();
+    const trimmedTitle = profile.title.trim() || 'My Ontario Tech Plan';
+    const trimmedAcademicYear = profile.academicYear.trim() || '2026/27';
+    const nextState: PlannerState = {
+      ...state,
+      title: trimmedTitle,
+      studentName: trimmedName,
+      studentId: profile.studentId.trim(),
+      academicYear: trimmedAcademicYear,
+      yearlyBudgets: Object.fromEntries(
+        Object.entries(state.yearlyBudgets).map(([year, yearBudget]) => [
+          Number(year),
+          { ...yearBudget, program: profile.program },
+        ]),
+      ) as Record<number, YearBudget>,
+      updatedAt: new Date().toISOString(),
+    };
+
+    setState(nextState);
+    saveLocalPlan(nextState);
+    try {
+      await updateCurrentUserProfile({
+        fullName: trimmedName,
+        studentProgram: profile.program,
+        expectedGraduationYear: getExpectedGraduationYear(trimmedAcademicYear, state.degreeYearsCount),
+      });
+      const remotePlanId = await saveRemotePlanSnapshot(nextState);
+      if (isSupabaseConfigured && !remotePlanId) {
+        throw new Error('Sign in to save these profile changes to Supabase.');
+      }
+      setSaveError('');
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1800);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Could not save your profile changes to Supabase.');
+      throw error;
+    }
+  };
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/');
   };
 
   const exportCsv = () => downloadTextFile('ontario-tech-financial-plan.csv', createPlannerCsv(state), 'text/csv;charset=utf-8');
@@ -752,8 +871,11 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
             <button type="button" className="icon-button" aria-label="Save plan" onClick={saveNow}>
               {saved ? <Check size={17} /> : <Save size={17} />}
             </button>
-            <button type="button" className="icon-button" aria-label="Sign out" onClick={() => void signOut().finally(() => navigate('/'))}>
-              <X size={17} />
+            <button type="button" className="secondary-button border-white/20 bg-white/10 text-white hover:bg-white/20" onClick={() => setShowProfile(true)}>
+              <UserRound size={16} /> Profile
+            </button>
+            <button type="button" className="secondary-button border-white/20 bg-white/10 text-white hover:bg-white/20" onClick={() => void handleSignOut()}>
+              <LogOut size={16} /> Sign out
             </button>
           </div>
         </div>
@@ -810,6 +932,12 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
           </div>
         )}
 
+        {saveError && (
+          <div className="no-print mb-6 rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-100">
+            {saveError}
+          </div>
+        )}
+
         {(tab === 'budget' || tab === 'split') && (
           <PlannerControls
             activeBudgetCard={activeBudgetCard}
@@ -848,6 +976,128 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
         {tab === 'deadlines' && <DeadlinesTab state={state} updateState={updateState} exportCalendar={exportCalendar} />}
         {tab === 'admin' && isAdmin && <AdminTab state={state} updateState={updateState} setTab={setTab} />}
       </main>
+
+      {showProfile && (
+        <ProfileModal
+          email={currentUserEmail}
+          onClose={() => setShowProfile(false)}
+          onSave={saveProfile}
+          state={state}
+        />
+      )}
+    </div>
+  );
+}
+
+function ProfileModal({
+  email,
+  onClose,
+  onSave,
+  state,
+}: {
+  email: string;
+  onClose: () => void;
+  onSave: (profile: ProfileFormValues) => Promise<void>;
+  state: PlannerState;
+}) {
+  const selectedProgram = state.yearlyBudgets[state.selectedYear]?.program ?? state.yearlyBudgets[1]?.program ?? Object.keys(state.config.programs)[0] ?? '';
+  const [form, setForm] = useState<ProfileFormValues>({
+    title: state.title,
+    studentName: state.studentName,
+    studentId: state.studentId,
+    academicYear: state.academicYear,
+    program: selectedProgram,
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const programs = Object.entries(state.config.programs).sort(([, left], [, right]) =>
+    `${left.category} ${left.label}`.localeCompare(`${right.category} ${right.label}`),
+  );
+
+  const updateForm = (patch: Partial<ProfileFormValues>) => setForm((previous) => ({ ...previous, ...patch }));
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await onSave(form);
+      onClose();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not save your profile.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-950/70 px-4 py-8 backdrop-blur-sm">
+      <section className="w-full max-w-2xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-4 bg-otu-blue px-5 py-4 text-white">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-otu-orange">
+              <UserRound size={21} />
+            </span>
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.2em] text-otu-sky">Account Profile</p>
+              <h2 className="text-xl font-black">Edit student details</h2>
+            </div>
+          </div>
+          <button type="button" className="icon-button border-white/20 bg-white/10 text-white hover:bg-white/20" aria-label="Close profile editor" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <form className="grid gap-4 p-5" onSubmit={submit}>
+          <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm dark:border-blue-900 dark:bg-blue-950/40">
+            <p className="font-bold text-otu-blue dark:text-blue-100">{email || 'Sandbox profile'}</p>
+            <p className="mt-1 text-slate-600 dark:text-slate-300">
+              Roles are managed separately in Supabase app metadata. This form only edits student profile details.
+            </p>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="block text-sm font-bold">
+              Plan title
+              <input className="field mt-1" value={form.title} onChange={(event) => updateForm({ title: event.target.value })} />
+            </label>
+            <label className="block text-sm font-bold">
+              Academic year
+              <input className="field mt-1" placeholder="2026/27" value={form.academicYear} onChange={(event) => updateForm({ academicYear: event.target.value })} />
+            </label>
+            <label className="block text-sm font-bold">
+              Student name
+              <input className="field mt-1" value={form.studentName} onChange={(event) => updateForm({ studentName: event.target.value })} />
+            </label>
+            <label className="block text-sm font-bold">
+              Student ID
+              <input className="field mt-1" value={form.studentId} onChange={(event) => updateForm({ studentId: event.target.value })} />
+            </label>
+          </div>
+
+          <label className="block text-sm font-bold">
+            Program
+            <select className="field mt-1" value={form.program} onChange={(event) => updateForm({ program: event.target.value as ProgramKey })}>
+              {programs.map(([key, program]) => (
+                <option key={key} value={key}>
+                  {program.category} - {program.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {error && <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-100">{error}</p>}
+
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 dark:border-slate-800 sm:flex-row sm:justify-end">
+            <button type="button" className="secondary-button" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" className="primary-button" disabled={busy}>
+              {busy ? 'Saving...' : 'Save Profile'}
+            </button>
+          </div>
+        </form>
+      </section>
     </div>
   );
 }
