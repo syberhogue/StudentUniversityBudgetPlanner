@@ -20,12 +20,11 @@ import {
   Sparkles,
   Sun,
   Trash2,
-  Users,
   Wallet,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { defaultPlannerConfig, expenseCategories, housingPresets, incomeCategories, programPresets } from './data/presets';
+import { defaultDeadlines, defaultPlannerConfig, expenseCategories, housingPresets, incomeCategories, programPresets } from './data/presets';
 import {
   createDeadlineIcs,
   createPlannerCsv,
@@ -35,7 +34,7 @@ import {
   downloadTextFile,
   encodeSharePayload,
 } from './lib/exports';
-import { clamp, formatCAD, parseCurrencyInput, slugify, uid } from './lib/format';
+import { formatCAD, parseCurrencyInput, slugify, uid } from './lib/format';
 import {
   addHousehold,
   calculateDegreeAnalysis,
@@ -180,6 +179,14 @@ const makeUniqueOptionKey = (label: string, record: Record<string, unknown>) => 
   return key;
 };
 
+const parseDateValue = (date: string) => {
+  const timestamp = new Date(`${date}T12:00:00`).getTime();
+  return Number.isFinite(timestamp) ? timestamp : Date.now();
+};
+
+const formatShortDate = (date: string) =>
+  new Intl.DateTimeFormat('en-CA', { month: 'short', day: 'numeric' }).format(new Date(`${date}T12:00:00`));
+
 const useRouter = () => {
   const [location, setLocation] = useState(getRoute);
   const navigate = (path: string) => {
@@ -210,6 +217,67 @@ const Stat = ({ label, value, tone = 'blue' }: { label: string; value: string; t
     </div>
   );
 };
+
+function WizardOptionCard({
+  active,
+  description,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  description?: string;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-lg border p-4 text-left transition ${
+        active
+          ? 'border-otu-orange bg-orange-50 shadow-soft ring-2 ring-otu-orange/20 dark:bg-orange-950/30'
+          : 'border-slate-200 bg-white hover:border-otu-sky hover:bg-blue-50/60 dark:border-slate-800 dark:bg-slate-950 dark:hover:border-otu-sky dark:hover:bg-slate-900'
+      }`}
+    >
+      <span className="flex items-start justify-between gap-3">
+        <span className="min-w-0 text-sm font-black leading-5 text-slate-900 dark:text-white">{label}</span>
+        <span
+          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+            active ? 'border-otu-orange bg-otu-orange text-white' : 'border-slate-300 dark:border-slate-600'
+          }`}
+        >
+          {active && <Check size={13} />}
+        </span>
+      </span>
+      {description && <span className="mt-2 block text-sm leading-5 text-slate-600 dark:text-slate-300">{description}</span>}
+    </button>
+  );
+}
+
+function WizardMoneyField({
+  label,
+  onChange,
+  value,
+}: {
+  label: string;
+  onChange: (value: number) => void;
+  value: number;
+}) {
+  return (
+    <label className="rounded-lg border border-slate-200 bg-white p-4 text-sm font-bold dark:border-slate-800 dark:bg-slate-950">
+      <span className="text-slate-700 dark:text-slate-200">{label}</span>
+      <span className="mt-3 flex items-center rounded-md border border-slate-300 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
+        <span className="text-sm font-black text-slate-400">$</span>
+        <input
+          className="w-full bg-transparent pl-2 text-lg font-black text-slate-900 focus:outline-none dark:text-white"
+          type="number"
+          value={value}
+          onChange={(event) => onChange(parseCurrencyInput(event.target.value))}
+        />
+      </span>
+    </label>
+  );
+}
 
 const NavButton = ({
   active,
@@ -467,7 +535,6 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
   const [shareUrl, setShareUrl] = useState('');
   const [showActionsMenu, setShowActionsMenu] = useState(false);
   const [showWizard, setShowWizard] = useState(() => !loadLocalPlan().wizardCompleted);
-  const [commandCenterCollapsed, setCommandCenterCollapsed] = useState(false);
   const [isAdmin, setIsAdmin] = useState(!isSupabaseConfigured);
   const budget =
     state.yearlyBudgets[state.selectedYear] ??
@@ -477,6 +544,13 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
   const totals = useMemo(() => calculateTermTotals(budget, activeTerm), [budget, activeTerm]);
   const selectedYearTotals = useMemo(() => calculateTermTotals(budget, 'academic'), [budget]);
   const degree = useMemo(() => calculateDegreeAnalysis(state), [state]);
+  const selectedProgramName = state.config.programs[budget.program]?.label ?? 'Ontario Tech Degree';
+  const commandCenterTitle = [
+    state.title || 'Ontario Tech Plan',
+    state.studentName || 'Student',
+    selectedProgramName,
+    state.academicYear || 'Academic Year',
+  ].join(' - ');
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode);
@@ -644,7 +718,7 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
 
   return (
     <div className="min-h-screen pb-16">
-      <header className="no-print sticky top-0 z-30 border-b-4 border-otu-orange bg-otu-blue text-white shadow-lg">
+      <header className="no-print sticky top-0 z-[200] border-b-4 border-otu-orange bg-otu-blue text-white shadow-lg">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-md bg-otu-orange">
@@ -659,11 +733,8 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
             <NavButton active={tab === 'budget'} onClick={() => setTab('budget')}>
               <Wallet size={16} /> Budget
             </NavButton>
-            <NavButton active={tab === 'split'} onClick={() => setTab('split')}>
-              <Users size={16} /> Splitter
-            </NavButton>
             <NavButton active={tab === 'degree'} onClick={() => setTab('degree')}>
-              <PiggyBank size={16} /> Degree
+              <PiggyBank size={16} /> Analysis
             </NavButton>
             <NavButton active={tab === 'deadlines'} onClick={() => setTab('deadlines')}>
               <CalendarDays size={16} /> Deadlines
@@ -689,18 +760,34 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-6">
-        <section className="brand-shell mb-6">
-          <div className="flex w-full items-center justify-between gap-4 bg-otu-blue p-4 text-left text-white">
+        <section className="brand-shell relative z-30 mb-6 overflow-visible">
+          <div className="flex w-full flex-col gap-4 bg-otu-blue p-4 text-left text-white md:flex-row md:items-center md:justify-between">
             <span className="flex min-w-0 items-center gap-3">
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-otu-orange text-white shadow-sm">
                 <GraduationCap size={22} />
               </span>
               <span className="min-w-0">
                 <span className="block text-xs font-black uppercase tracking-[0.2em] text-otu-sky">Planner Command Center</span>
-                <span className="block truncate text-xl font-black">{state.title || 'Ontario Tech Plan'}</span>
+                <span className="block truncate text-xl font-black">{commandCenterTitle}</span>
               </span>
             </span>
-            <span className="flex shrink-0 items-center gap-2">
+            <span className="relative flex shrink-0 flex-wrap items-center gap-2">
+              <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50" onClick={() => setShowActionsMenu((value) => !value)}>
+                <Share2 size={16} /> Share
+              </button>
+              {showActionsMenu && (
+                <div className="absolute right-0 top-12 z-[100] w-56 overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-2xl dark:border-slate-800 dark:bg-slate-900 dark:text-white">
+                  <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-800" onClick={() => { exportCsv(); setShowActionsMenu(false); }}>
+                    <Download size={16} /> Export CSV
+                  </button>
+                  <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-800" onClick={() => { printSummary(); setShowActionsMenu(false); }}>
+                    <Printer size={16} /> Print / PDF
+                  </button>
+                  <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-800" onClick={() => { void createShare(); setShowActionsMenu(false); }}>
+                    <Share2 size={16} /> Copy Share Link
+                  </button>
+                </div>
+              )}
               <button
                 type="button"
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50"
@@ -708,85 +795,8 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
               >
                 <SlidersHorizontal size={16} /> Wizard
               </button>
-              <button
-                type="button"
-                className="rounded-md border border-white/20 bg-white/10 px-3 py-2 text-xs font-black uppercase tracking-wide text-white transition hover:bg-white/20"
-                onClick={() => setCommandCenterCollapsed((value) => !value)}
-              >
-                {commandCenterCollapsed ? 'Expand' : 'Minimize'}
-              </button>
             </span>
           </div>
-
-          {!commandCenterCollapsed && (
-            <>
-              <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-end lg:justify-between">
-                <div className="min-w-0 flex-1">
-                  <div className="grid gap-3 md:grid-cols-4">
-                    <label className="text-sm font-bold">
-                      Plan title
-                      <input className="field mt-1" value={state.title} onChange={(event) => updateState((previous) => ({ ...previous, title: event.target.value }))} />
-                    </label>
-                    <label className="text-sm font-bold">
-                      Student
-                      <input className="field mt-1" value={state.studentName} onChange={(event) => updateState((previous) => ({ ...previous, studentName: event.target.value }))} />
-                    </label>
-                    <label className="text-sm font-bold">
-                      Inflation
-                      <input
-                        className="field mt-1"
-                        type="number"
-                        min={1}
-                        max={8}
-                        value={state.tuitionInflationRate}
-                        onChange={(event) =>
-                          updateState((previous) => ({ ...previous, tuitionInflationRate: clamp(parseCurrencyInput(event.target.value), 1, 8) }))
-                        }
-                      />
-                    </label>
-                    <label className="text-sm font-bold">
-                      Degree years
-                      <input
-                        className="field mt-1"
-                        type="number"
-                        min={1}
-                        max={5}
-                        value={state.degreeYearsCount}
-                        onChange={(event) => {
-                          const count = clamp(parseCurrencyInput(event.target.value), 1, 5);
-                          updateState((previous) => {
-                            const yearlyBudgets = { ...previous.yearlyBudgets };
-                            for (let year = 1; year <= count; year += 1) {
-                              yearlyBudgets[year] ??= createInitialYearBudget(year, previous.tuitionInflationRate, 'healthSci', 'off-campus', previous.config);
-                            }
-                            return { ...previous, degreeYearsCount: count, selectedYear: Math.min(previous.selectedYear, count), yearlyBudgets };
-                          });
-                        }}
-                      />
-                    </label>
-                  </div>
-                </div>
-                <div className="relative flex shrink-0 flex-wrap items-center gap-2">
-                  <button type="button" className="primary-button" onClick={() => setShowActionsMenu((value) => !value)}>
-                    <Share2 size={16} /> Share
-                  </button>
-                  {showActionsMenu && (
-                    <div className="absolute right-0 top-12 z-20 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
-                      <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-800" onClick={() => { exportCsv(); setShowActionsMenu(false); }}>
-                        <Download size={16} /> Export CSV
-                      </button>
-                      <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-800" onClick={() => { printSummary(); setShowActionsMenu(false); }}>
-                        <Printer size={16} /> Print / PDF
-                      </button>
-                      <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-bold hover:bg-slate-50 dark:hover:bg-slate-800" onClick={() => { void createShare(); setShowActionsMenu(false); }}>
-                        <Share2 size={16} /> Copy Share Link
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </>
-          )}
         </section>
 
         {shareUrl && (
@@ -800,7 +810,7 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
           </div>
         )}
 
-        {(tab === 'budget' || tab === 'split' || tab === 'deadlines') && (
+        {(tab === 'budget' || tab === 'split') && (
           <PlannerControls
             activeBudgetCard={activeBudgetCard}
             activeTerm={activeTerm}
@@ -835,7 +845,7 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
         )}
         {tab === 'split' && <SplitterTab state={state} splitGap={selectedYearTotals.netStudentDeficit} updateState={updateState} saveRowPreset={saveRowPreset} />}
         {tab === 'degree' && <DegreeTab state={state} degree={degree} />}
-        {tab === 'deadlines' && <DeadlinesTab state={state} updateState={updateState} exportCalendar={exportCalendar} saveRowPreset={saveRowPreset} />}
+        {tab === 'deadlines' && <DeadlinesTab state={state} updateState={updateState} exportCalendar={exportCalendar} />}
         {tab === 'admin' && isAdmin && <AdminTab state={state} updateState={updateState} setTab={setTab} />}
       </main>
     </div>
@@ -1288,46 +1298,50 @@ function RowPresetControls({
   };
 
   return (
-    <div className="grid gap-3 border-b border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/70 lg:grid-cols-[minmax(180px,1fr)_auto_minmax(180px,1fr)_auto_auto] lg:items-center">
-      <label className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">
-        Template
-        <select className="field mt-1" value={selectedPresetId} onChange={(event) => setSelectedPresetId(event.target.value)}>
-          <option value="">Select template</option>
-          {presets.map((preset) => (
-            <option key={preset.id} value={preset.id}>
-              {preset.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button
-        type="button"
-        className={`secondary-button self-end ${accentClass}`}
-        disabled={!selectedPreset}
-        onClick={() => selectedPreset && onApply(selectedPreset)}
-      >
-        Apply
-      </button>
-      <label className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">
-        Save Current Rows
-        <input
-          className="field mt-1"
-          placeholder={`${rowPresetKindLabels[kind]} template name`}
-          value={templateName}
-          onChange={(event) => setTemplateName(event.target.value)}
-        />
-      </label>
-      <button type="button" className={`secondary-button self-end ${accentClass}`} disabled={currentRows.length === 0} onClick={saveTemplate}>
-        <Save size={16} /> Save
-      </button>
-      <button
-        type="button"
-        className="secondary-button self-end text-rose-700 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950/30"
-        disabled={currentRows.length === 0}
-        onClick={onClear}
-      >
-        <Trash2 size={16} /> Clear All
-      </button>
+    <div className="space-y-3 border-b border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/70">
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+        <label className="min-w-0 text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          Template
+          <select className="field mt-1" value={selectedPresetId} onChange={(event) => setSelectedPresetId(event.target.value)}>
+            <option value="">Select template</option>
+            {presets.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className={`secondary-button self-end ${accentClass}`}
+          disabled={!selectedPreset}
+          onClick={() => selectedPreset && onApply(selectedPreset)}
+        >
+          Apply
+        </button>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-end">
+        <label className="min-w-0 text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          Save Current Rows
+          <input
+            className="field mt-1"
+            placeholder={`${rowPresetKindLabels[kind]} template name`}
+            value={templateName}
+            onChange={(event) => setTemplateName(event.target.value)}
+          />
+        </label>
+        <button type="button" className={`secondary-button self-end ${accentClass}`} disabled={currentRows.length === 0} onClick={saveTemplate}>
+          <Save size={16} /> Save
+        </button>
+        <button
+          type="button"
+          className="secondary-button self-end text-rose-700 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950/30"
+          disabled={currentRows.length === 0}
+          onClick={onClear}
+        >
+          <Trash2 size={16} /> Clear All
+        </button>
+      </div>
     </div>
   );
 }
@@ -1729,7 +1743,9 @@ function SplitterTab({
 
       <section className="panel overflow-hidden">
         <div className="bg-otu-orange p-4 text-white">
-          <h2 className="text-lg font-black">Payment Schedule</h2>
+          <h2 className="flex items-center gap-2 text-lg font-black">
+            <CalendarDays size={20} /> Payment Schedule
+          </h2>
         </div>
         <div className="grid gap-3 p-5">
           {state.households.map((household, index) => {
@@ -1774,88 +1790,300 @@ function DegreeTab({
   );
 }
 
+type TimelineFilter = 'important' | 'mine' | 'both';
+type TimelineDate = DeadlineEvent & { source: 'important' | 'mine' };
+
+function ImportantDatesTimeline({
+  activeDeadlineId,
+  deadlines,
+  markerTimestamp,
+  onActiveChange,
+  onMarkerChange,
+}: {
+  activeDeadlineId: string;
+  deadlines: TimelineDate[];
+  markerTimestamp: number;
+  onActiveChange: (id: string) => void;
+  onMarkerChange: (timestamp: number) => void;
+}) {
+  const sortedDeadlines = useMemo(
+    () => [...deadlines].sort((first, second) => parseDateValue(first.date) - parseDateValue(second.date)),
+    [deadlines],
+  );
+  const currentTimestamp = parseDateValue(new Date().toISOString().slice(0, 10));
+  const timestamps = sortedDeadlines.map((deadline) => parseDateValue(deadline.date));
+  const minTimestamp = Math.min(currentTimestamp, ...timestamps);
+  const maxTimestamp = Math.max(currentTimestamp, ...timestamps);
+  const span = Math.max(1, maxTimestamp - minTimestamp);
+  const getPosition = (timestamp: number) => ((timestamp - minTimestamp) / span) * 100;
+  const markerPosition = getPosition(Math.min(maxTimestamp, Math.max(minTimestamp, markerTimestamp)));
+
+  const pickNearestFromClientX = (clientX: number, currentTarget: HTMLElement) => {
+    const rect = currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    const timestamp = minTimestamp + ratio * span;
+    onMarkerChange(timestamp);
+    if (sortedDeadlines.length === 0) return;
+    const nearest = sortedDeadlines.reduce((best, deadline) =>
+      Math.abs(parseDateValue(deadline.date) - timestamp) < Math.abs(parseDateValue(best.date) - timestamp) ? deadline : best,
+    );
+    onActiveChange(nearest.id);
+  };
+
+  return (
+    <div className="border-b border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/70">
+      <div className="relative h-24 rounded-lg border border-slate-200 bg-white px-4 py-5 dark:border-slate-800 dark:bg-slate-900">
+        <div
+          className="absolute left-4 right-4 top-5 bottom-5 cursor-ew-resize"
+          onMouseMove={(event) => pickNearestFromClientX(event.clientX, event.currentTarget)}
+          onPointerDown={(event) => pickNearestFromClientX(event.clientX, event.currentTarget)}
+        >
+          <div className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-slate-200 dark:bg-slate-700" />
+          <div
+            className="absolute top-[calc(50%-18px)] h-9 w-0.5 bg-otu-orange shadow-[0_0_0_4px_rgba(231,93,42,0.14)]"
+            style={{ left: `${markerPosition}%` }}
+          >
+            <span className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-otu-orange shadow-lg" />
+            <span className="absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-otu-orange px-2 py-1 text-[11px] font-black text-white">
+              {Math.abs(markerTimestamp - currentTimestamp) < 86400000 / 2
+                ? 'Today'
+                : formatShortDate(new Date(markerTimestamp).toISOString().slice(0, 10))}
+            </span>
+          </div>
+          {sortedDeadlines.map((deadline) => {
+            const active = deadline.id === activeDeadlineId;
+            return (
+              <button
+                key={deadline.id}
+                type="button"
+                className={`absolute top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-2 transition ${
+                  active ? 'z-10 scale-110 text-otu-orange' : 'text-slate-500 hover:text-otu-orange'
+                }`}
+                style={{ left: `${getPosition(parseDateValue(deadline.date))}%` }}
+                onClick={() => {
+                  onMarkerChange(parseDateValue(deadline.date));
+                  onActiveChange(deadline.id);
+                }}
+              >
+                <span className={`h-5 w-5 rounded-full border-4 ${active ? 'border-otu-orange bg-white shadow-lg' : deadline.source === 'mine' ? 'border-otu-blue bg-white dark:bg-slate-950' : 'border-slate-300 bg-white dark:border-slate-600 dark:bg-slate-950'}`} />
+                {!active && (
+                  <span className="whitespace-nowrap rounded bg-slate-100 px-2 py-1 text-[11px] font-black text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    {formatShortDate(deadline.date)}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DeadlinesTab({
   state,
   updateState,
   exportCalendar,
-  saveRowPreset,
 }: {
   state: PlannerState;
   updateState: (updater: (previous: PlannerState) => PlannerState) => void;
   exportCalendar: () => void;
-  saveRowPreset: (kind: RowPresetKind, name: string, items: RowPresetItem[]) => void;
 }) {
-  const addDeadline = () => {
+  const sortedDeadlines = useMemo(
+    () => [...state.deadlines].sort((first, second) => parseDateValue(first.date) - parseDateValue(second.date)),
+    [state.deadlines],
+  );
+  const sortedStudentDeadlines = useMemo(
+    () => [...(state.studentDeadlines ?? [])].sort((first, second) => parseDateValue(first.date) - parseDateValue(second.date)),
+    [state.studentDeadlines],
+  );
+  const [timelineFilter, setTimelineFilter] = useState<TimelineFilter>('important');
+  const [timelineMarkerTimestamp, setTimelineMarkerTimestamp] = useState(() => parseDateValue(new Date().toISOString().slice(0, 10)));
+  const timelineDeadlines = useMemo(() => {
+    const important = sortedDeadlines.map((deadline) => ({ ...deadline, source: 'important' as const }));
+    const mine = sortedStudentDeadlines.map((deadline) => ({ ...deadline, source: 'mine' as const }));
+    if (timelineFilter === 'important') return important;
+    if (timelineFilter === 'mine') return mine;
+    return [...important, ...mine].sort((first, second) => parseDateValue(first.date) - parseDateValue(second.date));
+  }, [sortedDeadlines, sortedStudentDeadlines, timelineFilter]);
+  const [activeDeadlineId, setActiveDeadlineId] = useState(() => sortedDeadlines[0]?.id ?? '');
+  const activeTimelineDeadline = timelineDeadlines.find((deadline) => deadline.id === activeDeadlineId) ?? timelineDeadlines[0];
+
+  useEffect(() => {
+    if (timelineDeadlines.length > 0 && !timelineDeadlines.some((deadline) => deadline.id === activeDeadlineId)) {
+      setActiveDeadlineId(timelineDeadlines[0].id);
+    }
+  }, [activeDeadlineId, timelineDeadlines]);
+
+  const selectTimelineDate = (deadline: DeadlineEvent, source: TimelineDate['source']) => {
+    if (timelineFilter !== 'both' && timelineFilter !== source) {
+      setTimelineFilter(source);
+    }
+    setTimelineMarkerTimestamp(parseDateValue(deadline.date));
+    setActiveDeadlineId(deadline.id);
+  };
+
+  const addStudentDeadline = () => {
     updateState((previous) => ({
       ...previous,
-      deadlines: [
-        ...previous.deadlines,
-        { id: uid('deadline'), title: 'Custom deadline', date: new Date().toISOString().slice(0, 10), category: 'Custom', notes: '', completed: false },
+      studentDeadlines: [
+        ...(previous.studentDeadlines ?? []),
+        { id: uid('student-date'), title: 'My important date', date: new Date().toISOString().slice(0, 10), category: 'Custom', notes: '', completed: false },
       ],
     }));
   };
 
-  const updateDeadline = (id: string, patch: Partial<DeadlineEvent>) => {
+  const updateStudentDeadline = (id: string, patch: Partial<DeadlineEvent>) => {
     updateState((previous) => ({
       ...previous,
-      deadlines: previous.deadlines.map((deadline) => (deadline.id === id ? { ...deadline, ...patch } : deadline)),
+      studentDeadlines: (previous.studentDeadlines ?? []).map((deadline) => (deadline.id === id ? { ...deadline, ...patch } : deadline)),
     }));
   };
 
   return (
-    <section className="panel overflow-hidden">
-      <div className="flex items-center justify-between bg-otu-orange p-4 text-white">
-        <h2 className="flex items-center gap-2 text-lg font-black">
-          <CalendarDays /> SAFA Deadlines
-        </h2>
-        <div className="flex gap-2">
-          <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-orange transition hover:bg-orange-50" onClick={exportCalendar}>
-            <Download size={16} /> ICS
-          </button>
-          <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-orange transition hover:bg-orange-50" onClick={addDeadline}>
-            <Plus size={16} /> Add
-          </button>
-        </div>
-      </div>
-      <RowPresetControls
-        currentRows={state.deadlines}
-        kind="deadlines"
-        onApply={(preset) =>
-          updateState((previous) => ({
-            ...previous,
-            deadlines: cloneRowPresetItems('deadlines', preset.items) as DeadlineEvent[],
-          }))
-        }
-        onClear={() => updateState((previous) => ({ ...previous, deadlines: [] }))}
-        onSave={(name) => saveRowPreset('deadlines', name, state.deadlines)}
-        presets={getRowPresets(state, 'deadlines')}
-        tone="orange"
-      />
-      <div className="divide-y divide-slate-200 dark:divide-slate-800">
-        {state.deadlines.map((deadline, index) => (
-          <div key={deadline.id} className={`grid gap-3 p-4 md:grid-cols-[auto_1fr_160px_150px_40px] md:items-center ${index % 2 === 1 ? 'bg-orange-50/60 dark:bg-orange-950/20' : 'bg-white dark:bg-slate-900'}`}>
-            <input type="checkbox" checked={deadline.completed} onChange={(event) => updateDeadline(deadline.id, { completed: event.target.checked })} />
-            <input className="field" value={deadline.title} onChange={(event) => updateDeadline(deadline.id, { title: event.target.value })} />
-            <input className="field" type="date" value={deadline.date} onChange={(event) => updateDeadline(deadline.id, { date: event.target.value })} />
-            <select className="field" value={deadline.category} onChange={(event) => updateDeadline(deadline.id, { category: event.target.value as DeadlineEvent['category'] })}>
-              {['OSAP', 'Tuition', 'SAFA', 'Scholarship', 'Custom'].map((category) => (
-                <option key={category} value={category}>
-                  {category}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="icon-button"
-              aria-label={`Remove ${deadline.title}`}
-              onClick={() => updateState((previous) => ({ ...previous, deadlines: previous.deadlines.filter((item) => item.id !== deadline.id) }))}
-            >
-              <Trash2 size={16} />
+    <div className="space-y-6">
+      <section className="panel overflow-hidden">
+        <div className="flex flex-col gap-3 bg-otu-orange p-4 text-white lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h2 className="flex items-center gap-2 text-lg font-black">
+              <CalendarDays /> Important Dates
+            </h2>
+            <p className="mt-1 text-sm text-orange-50">Upcoming dates and deadlines for tuition, OSAP, scholarships, and planning milestones.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { key: 'important' as TimelineFilter, label: 'Important Dates' },
+              { key: 'mine' as TimelineFilter, label: 'My Dates' },
+              { key: 'both' as TimelineFilter, label: 'Both' },
+            ].map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className={`inline-flex items-center justify-center rounded-md px-3 py-1.5 text-xs font-black transition ${
+                  timelineFilter === option.key
+                    ? 'bg-white text-otu-orange shadow-sm'
+                    : 'border border-white/30 bg-white/10 text-white hover:bg-white/20'
+                }`}
+                onClick={() => setTimelineFilter(option.key)}
+              >
+                {option.label}
+              </button>
+            ))}
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-3 py-1.5 text-xs font-black text-otu-orange transition hover:bg-orange-50" onClick={exportCalendar}>
+              <Download size={14} /> ICS
             </button>
           </div>
-        ))}
-      </div>
-    </section>
+        </div>
+        <ImportantDatesTimeline
+          activeDeadlineId={activeTimelineDeadline?.id ?? ''}
+          deadlines={timelineDeadlines}
+          markerTimestamp={timelineMarkerTimestamp}
+          onActiveChange={setActiveDeadlineId}
+          onMarkerChange={setTimelineMarkerTimestamp}
+        />
+        <div className="divide-y divide-slate-200 dark:divide-slate-800">
+          {sortedDeadlines.map((deadline, index) => {
+            const active = deadline.id === activeTimelineDeadline?.id;
+            return (
+              <div
+                key={deadline.id}
+                onFocus={() => selectTimelineDate(deadline, 'important')}
+                onMouseEnter={() => selectTimelineDate(deadline, 'important')}
+                className={`grid gap-3 p-4 transition md:grid-cols-[150px_1fr_140px] md:items-center ${
+                  active
+                    ? 'bg-orange-100 ring-2 ring-inset ring-otu-orange/40 dark:bg-orange-950/35'
+                    : index % 2 === 1
+                      ? 'bg-orange-50/60 dark:bg-orange-950/20'
+                      : 'bg-white dark:bg-slate-900'
+                }`}
+              >
+                <div className="font-black text-otu-orange">{deadline.date}</div>
+                <div>
+                  <h3 className="font-black">{deadline.title}</h3>
+                  {deadline.notes && <p className="mt-1 text-sm font-semibold text-slate-600 dark:text-slate-300">{deadline.notes}</p>}
+                </div>
+                <span className={`w-fit rounded-md px-3 py-2 text-xs font-black uppercase tracking-wide ${active ? 'bg-otu-orange text-white' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>
+                  {deadline.category}
+                </span>
+              </div>
+            );
+          })}
+          {sortedDeadlines.length === 0 && (
+            <div className="p-5 text-sm font-semibold text-slate-500 dark:text-slate-400">
+              No important dates have been configured. Add them in Admin Presets.
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="flex items-center justify-between gap-3 bg-otu-blue p-4 text-white">
+          <div>
+            <h2 className="flex items-center gap-2 text-lg font-black">
+              <Plus size={18} /> My Dates
+            </h2>
+            <p className="mt-1 text-sm text-blue-100">Add personal reminders alongside the official timeline.</p>
+          </div>
+          <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50" onClick={addStudentDeadline}>
+            <Plus size={16} /> Add Date
+          </button>
+        </div>
+        <div className="divide-y divide-slate-200 dark:divide-slate-800">
+          {sortedStudentDeadlines.map((deadline, index) => {
+            const active = deadline.id === activeTimelineDeadline?.id;
+            return (
+            <div
+              key={deadline.id}
+              onFocus={() => selectTimelineDate(deadline, 'mine')}
+              onMouseEnter={() => selectTimelineDate(deadline, 'mine')}
+              className={`grid gap-3 p-4 transition md:grid-cols-[1fr_160px_150px_1fr_40px] md:items-end ${active ? 'bg-orange-100 ring-2 ring-inset ring-otu-orange/40 dark:bg-orange-950/35' : index % 2 === 1 ? 'bg-blue-50/55 dark:bg-blue-950/20' : 'bg-white dark:bg-slate-900'}`}
+            >
+              <label className="text-sm font-bold">
+                Title
+                <input className="field mt-1" value={deadline.title} onChange={(event) => updateStudentDeadline(deadline.id, { title: event.target.value })} />
+              </label>
+              <label className="text-sm font-bold">
+                Date
+                <input className="field mt-1" type="date" value={deadline.date} onChange={(event) => updateStudentDeadline(deadline.id, { date: event.target.value })} />
+              </label>
+              <label className="text-sm font-bold">
+                Category
+                <select className="field mt-1" value={deadline.category} onChange={(event) => updateStudentDeadline(deadline.id, { category: event.target.value as DeadlineEvent['category'] })}>
+                  {['OSAP', 'Tuition', 'SAFA', 'Scholarship', 'Custom'].map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-bold">
+                Notes
+                <input className="field mt-1" value={deadline.notes} onChange={(event) => updateStudentDeadline(deadline.id, { notes: event.target.value })} />
+              </label>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={`Remove ${deadline.title}`}
+                onClick={() =>
+                  updateState((previous) => ({
+                    ...previous,
+                    studentDeadlines: (previous.studentDeadlines ?? []).filter((item) => item.id !== deadline.id),
+                  }))
+                }
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+            );
+          })}
+          {(state.studentDeadlines ?? []).length === 0 && (
+            <div className="p-5 text-sm font-semibold text-slate-500 dark:text-slate-400">
+              Add personal due dates, reminders, appointments, or scholarship milestones here.
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1869,6 +2097,7 @@ function AdminTab({
   setTab: (tab: DashboardTab) => void;
 }) {
   const [draft, setDraft] = useState<PlannerConfig>(state.config);
+  const [draftDeadlines, setDraftDeadlines] = useState<DeadlineEvent[]>(state.deadlines);
   const [status, setStatus] = useState('');
 
   const updateProgram = (key: ProgramKey, patch: Partial<PlannerConfig['programs'][ProgramKey]>) => {
@@ -1958,12 +2187,27 @@ function AdminTab({
     });
   };
 
+  const addDeadline = () => {
+    setDraftDeadlines((previous) => [
+      ...previous,
+      { id: uid('deadline'), title: 'Custom deadline', date: new Date().toISOString().slice(0, 10), category: 'Custom', notes: '', completed: false },
+    ]);
+  };
+
+  const updateDeadline = (id: string, patch: Partial<DeadlineEvent>) => {
+    setDraftDeadlines((previous) => previous.map((deadline) => (deadline.id === id ? { ...deadline, ...patch } : deadline)));
+  };
+
+  const removeDeadline = (id: string) => {
+    setDraftDeadlines((previous) => previous.filter((deadline) => deadline.id !== id));
+  };
+
   const saveConfig = async () => {
-    updateState((previous) => ({ ...previous, config: draft }));
+    updateState((previous) => ({ ...previous, config: draft, deadlines: draftDeadlines }));
     await saveRemotePlannerConfig(draft).catch((error) => {
       setStatus(error instanceof Error ? error.message : 'Remote preset save failed; local presets were updated.');
     });
-    setStatus('Preset configuration saved.');
+    setStatus('Preset configuration and important dates saved.');
   };
 
   const applyToSelectedYear = () => {
@@ -2006,7 +2250,7 @@ function AdminTab({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50" onClick={() => setDraft(defaultPlannerConfig)}>
+            <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50" onClick={() => { setDraft(defaultPlannerConfig); setDraftDeadlines(defaultDeadlines); }}>
               Reset Defaults
             </button>
             <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50" onClick={applyToSelectedYear}>
@@ -2020,7 +2264,7 @@ function AdminTab({
         {status && <p className="mt-4 rounded-md bg-blue-50 p-3 text-sm font-semibold text-otu-blue dark:bg-blue-950 dark:text-blue-100">{status}</p>}
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-2">
+      <section className="space-y-6">
         <div className="panel overflow-hidden">
           <div className="flex items-center justify-between gap-3 bg-otu-blue p-4 text-white">
             <h3 className="font-black">Program Tuition & Ancillary Fees</h3>
@@ -2103,6 +2347,85 @@ function AdminTab({
       </section>
 
       <section className="panel overflow-hidden">
+        <div className="flex items-center justify-between gap-3 bg-otu-orange p-4 text-white">
+          <h3 className="flex items-center gap-2 font-black">
+            <CalendarDays size={18} /> Important Dates
+          </h3>
+          <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-3 py-2 text-sm font-bold text-otu-orange transition hover:bg-orange-50" onClick={addDeadline}>
+            <Plus size={15} /> Add Date
+          </button>
+        </div>
+        <RowPresetControls
+          currentRows={draftDeadlines}
+          kind="deadlines"
+          onApply={(preset) => setDraftDeadlines(cloneRowPresetItems('deadlines', preset.items) as DeadlineEvent[])}
+          onClear={() => setDraftDeadlines([])}
+          onSave={(name) => {
+            const trimmedName = name.trim();
+            if (!trimmedName) return;
+            updateState((previous) => {
+              const now = new Date().toISOString();
+              const existing = previous.rowPresets.find(
+                (preset) => preset.kind === 'deadlines' && preset.name.trim().toLowerCase() === trimmedName.toLowerCase(),
+              );
+              const nextPreset: RowPreset = {
+                id: existing?.id ?? uid('preset'),
+                kind: 'deadlines',
+                name: trimmedName,
+                items: cloneRowPresetItems('deadlines', draftDeadlines),
+                createdAt: existing?.createdAt ?? now,
+                updatedAt: now,
+              };
+              return {
+                ...previous,
+                rowPresets: existing
+                  ? previous.rowPresets.map((preset) => (preset.id === existing.id ? nextPreset : preset))
+                  : [...previous.rowPresets, nextPreset],
+              };
+            });
+          }}
+          presets={getRowPresets(state, 'deadlines')}
+          tone="orange"
+        />
+        <div className="divide-y divide-slate-200 dark:divide-slate-800">
+          {draftDeadlines.map((deadline, index) => (
+            <div key={deadline.id} className={`grid gap-3 p-4 md:grid-cols-[1fr_160px_150px_1fr_40px] md:items-end ${index % 2 === 1 ? 'bg-orange-50/60 dark:bg-orange-950/20' : 'bg-white dark:bg-slate-900'}`}>
+              <label className="text-sm font-bold">
+                Title
+                <input className="field mt-1" value={deadline.title} onChange={(event) => updateDeadline(deadline.id, { title: event.target.value })} />
+              </label>
+              <label className="text-sm font-bold">
+                Date
+                <input className="field mt-1" type="date" value={deadline.date} onChange={(event) => updateDeadline(deadline.id, { date: event.target.value })} />
+              </label>
+              <label className="text-sm font-bold">
+                Category
+                <select className="field mt-1" value={deadline.category} onChange={(event) => updateDeadline(deadline.id, { category: event.target.value as DeadlineEvent['category'] })}>
+                  {['OSAP', 'Tuition', 'SAFA', 'Scholarship', 'Custom'].map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-bold">
+                Notes
+                <input className="field mt-1" value={deadline.notes} onChange={(event) => updateDeadline(deadline.id, { notes: event.target.value })} />
+              </label>
+              <button type="button" className="icon-button" aria-label={`Remove ${deadline.title}`} onClick={() => removeDeadline(deadline.id)}>
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ))}
+          {draftDeadlines.length === 0 && (
+            <div className="p-4 text-sm font-semibold text-slate-500 dark:text-slate-400">
+              Add OSAP, tuition, SAFA, scholarship, or custom dates to publish them on the Deadlines page.
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="panel overflow-hidden">
         <div className="flex items-center justify-between gap-3 bg-otu-blue p-4 text-white">
           <h3 className="font-black">Meal Plan Options</h3>
           <button type="button" className="inline-flex items-center justify-center gap-2 rounded-md bg-white px-3 py-2 text-sm font-bold text-otu-blue transition hover:bg-blue-50" onClick={addMealPlan}>
@@ -2154,21 +2477,33 @@ function OnboardingWizard({
   onFinish: (state: PlannerState) => void;
   state: PlannerState;
 }) {
-  const initialProgram = Object.keys(config.programs)[0] ?? 'custom-program';
-  const initialLivingSituation = Object.keys(config.housing)[0] ?? 'custom-housing';
-  const initialMealPlan = config.mealPlans.standard ? 'standard' : Object.keys(config.mealPlans)[0] ?? 'none';
+  const currentFirstYear = state.yearlyBudgets[1];
+  const initialProgram = currentFirstYear && config.programs[currentFirstYear.program] ? currentFirstYear.program : Object.keys(config.programs)[0] ?? 'custom-program';
+  const initialLivingSituation =
+    currentFirstYear && config.housing[currentFirstYear.livingSituation]
+      ? currentFirstYear.livingSituation
+      : Object.keys(config.housing)[0] ?? 'custom-housing';
+  const initialMealPlan =
+    currentFirstYear && config.mealPlans[currentFirstYear.mealPlan]
+      ? currentFirstYear.mealPlan
+      : config.mealPlans.standard
+        ? 'standard'
+        : Object.keys(config.mealPlans)[0] ?? 'none';
   const [step, setStep] = useState(0);
+  const [planTitle, setPlanTitle] = useState(state.title || 'My Ontario Tech Plan');
+  const [studentName, setStudentName] = useState(state.studentName || '');
+  const [academicYear, setAcademicYear] = useState(state.academicYear || '2026/27');
   const [program, setProgram] = useState<ProgramKey>(initialProgram);
   const [livingSituation, setLivingSituation] = useState<LivingSituation>(initialLivingSituation);
   const [mealPlan, setMealPlan] = useState<MealPlanKey>(initialMealPlan);
-  const [monthlyGroceries, setMonthlyGroceries] = useState(475);
+  const [monthlyGroceries, setMonthlyGroceries] = useState(currentFirstYear?.monthlyGroceries ?? 475);
   const [partTimeIncome, setPartTimeIncome] = useState(500);
   const [scholarshipName, setScholarshipName] = useState('Scholarship');
   const [scholarshipAmount, setScholarshipAmount] = useState(2000);
   const [osapAmount, setOsapAmount] = useState(8600);
-  const [respAmount, setRespAmount] = useState(25000);
-  const [otherSavings, setOtherSavings] = useState(5000);
-  const [householdCount, setHouseholdCount] = useState(2);
+  const [respAmount, setRespAmount] = useState(state.savingsSources.find((source) => source.type === 'RESP')?.amount ?? 25000);
+  const [otherSavings, setOtherSavings] = useState(state.savingsSources.find((source) => source.type === 'Savings')?.amount ?? 5000);
+  const [householdCount, setHouseholdCount] = useState(Math.max(1, state.households.length || 2));
   const [programSearch, setProgramSearch] = useState('');
   const [programCategory, setProgramCategory] = useState('All');
 
@@ -2221,6 +2556,9 @@ function OnboardingWizard({
 
     onFinish({
       ...state,
+      title: planTitle.trim() || 'My Ontario Tech Plan',
+      studentName: studentName.trim(),
+      academicYear: academicYear.trim() || '2026/27',
       selectedYear: 1,
       activeTerm: 'academic',
       yearlyBudgets: nextYearlyBudgets,
@@ -2241,64 +2579,51 @@ function OnboardingWizard({
   const previewFunding = Math.min(respAmount, 8500) + osapAmount + scholarshipAmount + partTimeIncome * 8;
   const previewGap = Math.max(0, previewCost - previewFunding);
 
-  const OptionCard = ({
-    active,
-    description,
-    label,
-    onClick,
-  }: {
-    active: boolean;
-    description?: string;
-    label: string;
-    onClick: () => void;
-  }) => (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-lg border p-4 text-left transition ${
-        active
-          ? 'border-otu-orange bg-orange-50 shadow-soft ring-2 ring-otu-orange/20 dark:bg-orange-950/30'
-          : 'border-slate-200 bg-white hover:border-otu-sky hover:bg-blue-50/60 dark:border-slate-800 dark:bg-slate-950 dark:hover:border-otu-sky dark:hover:bg-slate-900'
-      }`}
-    >
-      <span className="flex items-start justify-between gap-3">
-        <span className="min-w-0 text-sm font-black leading-5 text-slate-900 dark:text-white">{label}</span>
-        <span
-          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
-            active ? 'border-otu-orange bg-otu-orange text-white' : 'border-slate-300 dark:border-slate-600'
-          }`}
-        >
-          {active && <Check size={13} />}
-        </span>
-      </span>
-      {description && <span className="mt-2 block text-sm leading-5 text-slate-600 dark:text-slate-300">{description}</span>}
-    </button>
-  );
-
-  const MoneyField = ({
-    label,
-    onChange,
-    value,
-  }: {
-    label: string;
-    onChange: (value: number) => void;
-    value: number;
-  }) => (
-    <label className="rounded-lg border border-slate-200 bg-white p-4 text-sm font-bold dark:border-slate-800 dark:bg-slate-950">
-      <span className="text-slate-700 dark:text-slate-200">{label}</span>
-      <span className="mt-3 flex items-center rounded-md border border-slate-300 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
-        <span className="text-sm font-black text-slate-400">$</span>
-        <input
-          className="w-full bg-transparent pl-2 text-lg font-black text-slate-900 focus:outline-none dark:text-white"
-          type="number"
-          value={value}
-          onChange={(event) => onChange(parseCurrencyInput(event.target.value))}
-        />
-      </span>
-    </label>
-  );
-
   const steps = [
+    {
+      eyebrow: 'Plan identity',
+      title: 'Name this plan and academic year.',
+      subtitle: 'These details appear in the Command Center so the plan is easy to recognize when you return.',
+      body: (
+        <div className="question-card">
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="rounded-lg border border-slate-200 bg-white p-4 text-sm font-bold dark:border-slate-800 dark:bg-slate-950 md:col-span-2">
+              Plan title
+              <input
+                className="field mt-3"
+                placeholder="My Ontario Tech Plan"
+                value={planTitle}
+                onChange={(event) => setPlanTitle(event.target.value)}
+              />
+            </label>
+            <label className="rounded-lg border border-slate-200 bg-white p-4 text-sm font-bold dark:border-slate-800 dark:bg-slate-950">
+              Student name
+              <input
+                className="field mt-3"
+                placeholder="Student name"
+                value={studentName}
+                onChange={(event) => setStudentName(event.target.value)}
+              />
+            </label>
+            <label className="rounded-lg border border-slate-200 bg-white p-4 text-sm font-bold dark:border-slate-800 dark:bg-slate-950">
+              Academic year
+              <input
+                className="field mt-3"
+                placeholder="2026/27"
+                value={academicYear}
+                onChange={(event) => setAcademicYear(event.target.value)}
+              />
+            </label>
+          </div>
+          <div className="mt-4 rounded-lg bg-otu-blue p-4 text-white">
+            <p className="text-xs font-black uppercase tracking-wide text-otu-sky">Command Center Preview</p>
+            <p className="mt-2 text-lg font-black">
+              {planTitle.trim() || 'My Ontario Tech Plan'} - {studentName.trim() || 'Student'} - {selectedProgramPreset?.label ?? 'Ontario Tech Degree'} - {academicYear.trim() || '2026/27'}
+            </p>
+          </div>
+        </div>
+      ),
+    },
     {
       eyebrow: 'Start with school costs',
       title: 'What Ontario Tech program are you planning for?',
@@ -2337,7 +2662,7 @@ function OnboardingWizard({
           </div>
           <div className="mt-4 grid max-h-[380px] gap-3 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
             {filteredPrograms.map(([key, value]) => (
-              <OptionCard
+              <WizardOptionCard
                 key={key}
                 active={program === key}
                 description={`${value.category} | ${formatCAD(value.tuition)} tuition + ${formatCAD(value.ancillary)} fees`}
@@ -2363,7 +2688,7 @@ function OnboardingWizard({
           <h3 className="text-sm font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Living Situation</h3>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             {Object.entries(config.housing).map(([key, value]) => (
-              <OptionCard
+              <WizardOptionCard
                 key={key}
                 active={livingSituation === key}
                 description={`${value.description} Housing default: ${formatCAD(value.housing)}`}
@@ -2389,7 +2714,7 @@ function OnboardingWizard({
             <h3 className="text-sm font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Meal Plan</h3>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               {Object.entries(config.mealPlans).map(([key, value]) => (
-                <OptionCard
+                <WizardOptionCard
                   key={key}
                   active={mealPlan === key}
                   description={key === 'none' ? 'Use groceries instead' : `${formatCAD(value.cost)} estimated annual cost`}
@@ -2400,8 +2725,8 @@ function OnboardingWizard({
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
-            <MoneyField label="Estimated groceries per month" value={monthlyGroceries} onChange={setMonthlyGroceries} />
-            <MoneyField label="Part-time income per month" value={partTimeIncome} onChange={setPartTimeIncome} />
+            <WizardMoneyField label="Estimated groceries per month" value={monthlyGroceries} onChange={setMonthlyGroceries} />
+            <WizardMoneyField label="Part-time income per month" value={partTimeIncome} onChange={setPartTimeIncome} />
           </div>
         </div>
       ),
@@ -2418,10 +2743,10 @@ function OnboardingWizard({
               Scholarship name
               <input className="field mt-3" value={scholarshipName} onChange={(event) => setScholarshipName(event.target.value)} />
             </label>
-            <MoneyField label="Scholarship amount" value={scholarshipAmount} onChange={setScholarshipAmount} />
-            <MoneyField label="OSAP estimate" value={osapAmount} onChange={setOsapAmount} />
-            <MoneyField label="RESP balance" value={respAmount} onChange={setRespAmount} />
-            <MoneyField label="Other education savings" value={otherSavings} onChange={setOtherSavings} />
+            <WizardMoneyField label="Scholarship amount" value={scholarshipAmount} onChange={setScholarshipAmount} />
+            <WizardMoneyField label="OSAP estimate" value={osapAmount} onChange={setOsapAmount} />
+            <WizardMoneyField label="RESP balance" value={respAmount} onChange={setRespAmount} />
+            <WizardMoneyField label="Other education savings" value={otherSavings} onChange={setOtherSavings} />
           </div>
         </div>
       ),
@@ -2435,7 +2760,7 @@ function OnboardingWizard({
           <h3 className="text-sm font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Household Split</h3>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             {[1, 2, 3, 4].map((count) => (
-              <OptionCard
+              <WizardOptionCard
                 key={count}
                 active={householdCount === count}
                 description={count === 1 ? 'One payer group' : `${count} equal starting shares`}

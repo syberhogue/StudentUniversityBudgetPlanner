@@ -106,6 +106,7 @@ export interface PlannerState {
   title: string;
   studentName: string;
   studentId: string;
+  academicYear: string;
   degreeYearsCount: number;
   tuitionInflationRate: number;
   selectedYear: number;
@@ -114,6 +115,7 @@ export interface PlannerState {
   savingsSources: SavingsAccount[];
   households: Household[];
   deadlines: DeadlineEvent[];
+  studentDeadlines: DeadlineEvent[];
   rowPresets: RowPreset[];
   config: PlannerConfig;
   wizardCompleted: boolean;

@@ -75,7 +75,7 @@ export const decodeSharePayload = (encoded: string): SharePayload | null => {
 
 export const createDeadlineIcs = (state: PlannerState) => {
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ontario Tech Financial Planner//EN'];
-  state.deadlines
+  [...state.deadlines, ...(state.studentDeadlines ?? [])]
     .filter((deadline) => !deadline.completed)
     .forEach((deadline) => {
       const date = deadline.date.split('-').join('');
@@ -99,6 +99,7 @@ export const createPrintableSummary = (state: PlannerState) => {
     'Ontario Tech Student Financial Planner Summary',
     `Plan: ${state.title}`,
     `Student: ${state.studentName || 'Sandbox student'}`,
+    `Academic year: ${state.academicYear || '2026/27'}`,
     `Year ${state.selectedYear} support gap: ${formatCAD(totals.netStudentDeficit)}`,
     `Program total projection: ${formatCAD(degree.grandTotalCost)}`,
     `Parent support projection: ${formatCAD(degree.grandTotalParentSupportNeeded)}`,
