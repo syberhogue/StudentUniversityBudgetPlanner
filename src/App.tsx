@@ -6,11 +6,11 @@ import {
   Download,
   GraduationCap,
   Home,
+  House,
   Landmark,
   Link,
   LogIn,
   LogOut,
-  Moon,
   PiggyBank,
   Plus,
   Printer,
@@ -20,13 +20,14 @@ import {
   Settings,
   SlidersHorizontal,
   Sparkles,
-  Sun,
   Trash2,
   UserRound,
   Wallet,
   X,
+  DollarSign,
+  Sun,
 } from 'lucide-react';
-import { type FormEvent, useEffect, useMemo, useState } from 'react';
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { defaultDeadlines, defaultPlannerConfig, expenseCategories, housingPresets, incomeCategories, programPresets } from './data/presets';
 import {
   createDeadlineIcs,
@@ -555,7 +556,6 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
   const [state, setState] = useState<PlannerState>(() => loadLocalPlan());
   const [tab, setTab] = useState<DashboardTab>('budget');
   const [activeBudgetCard, setActiveBudgetCard] = useState<BudgetCard>('funding');
-  const [darkMode, setDarkMode] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
   const [saved, setSaved] = useState(false);
   const [shareUrl, setShareUrl] = useState('');
   const [showActionsMenu, setShowActionsMenu] = useState(false);
@@ -588,8 +588,8 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
       : 'Local draft only: sign in to save to Supabase';
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', darkMode);
-  }, [darkMode]);
+    document.documentElement.classList.remove('dark');
+  }, []);
 
   useEffect(() => {
     saveLocalPlan(state);
@@ -866,9 +866,9 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
   }
 
   return (
-    <div className="min-h-screen pb-16">
+    <div className="min-h-screen overflow-x-hidden pb-12">
       <header className="no-print sticky top-0 z-[200] border-b-4 border-otu-orange bg-otu-blue text-white shadow-lg">
-        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-md bg-otu-orange">
               <GraduationCap size={24} />
@@ -878,7 +878,7 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
               <p className="text-xs font-semibold text-blue-100">{storageStatus}</p>
             </div>
           </div>
-          <nav className="flex flex-wrap gap-1 rounded-lg bg-otu-navy p-1">
+          <nav className="flex max-w-full flex-wrap gap-1 rounded-lg bg-otu-navy p-1">
             <NavButton active={tab === 'budget'} onClick={() => setTab('budget')}>
               <Wallet size={16} /> Budget
             </NavButton>
@@ -894,10 +894,7 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
               </NavButton>
             )}
           </nav>
-          <div className="flex items-center gap-2">
-            <button type="button" className="icon-button" aria-label="Toggle dark mode" onClick={() => setDarkMode((value) => !value)}>
-              {darkMode ? <Sun size={17} /> : <Moon size={17} />}
-            </button>
+          <div className="flex flex-wrap items-center gap-2">
             <button type="button" className="icon-button" aria-label="Save plan" onClick={saveNow}>
               {saved ? <Check size={17} /> : <Save size={17} />}
             </button>
@@ -917,7 +914,7 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-4 py-6">
+      <main className="mx-auto max-w-7xl px-4 py-4 md:py-5">
         <section className="brand-shell relative z-30 mb-6 overflow-visible">
           <div className="flex w-full flex-col gap-4 bg-otu-blue p-4 text-left text-white md:flex-row md:items-center md:justify-between">
             <span className="flex min-w-0 items-center gap-3">
@@ -1067,8 +1064,8 @@ function ProfileModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-950/70 px-4 py-8 backdrop-blur-sm">
-      <section className="w-full max-w-2xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+    <div className="fixed inset-0 z-[300] flex items-start justify-center overflow-y-auto bg-slate-950/70 px-4 py-4 backdrop-blur-sm sm:items-center">
+      <section className="max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
         <div className="flex items-center justify-between gap-4 bg-otu-blue px-5 py-4 text-white">
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-otu-orange">
@@ -1175,9 +1172,10 @@ function PlannerControls({
 
   return (
     <div className="mb-6 space-y-6">
-      <section className="grid gap-4 md:grid-cols-4">
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryToggle
           active={tab === 'budget' && activeBudgetCard === 'savings'}
+          icon={<PiggyBank size={18} />}
           label="Savings"
           value={formatCAD(savingsTotal)}
           tone="blue"
@@ -1185,6 +1183,7 @@ function PlannerControls({
         />
         <SummaryToggle
           active={tab === 'budget' && activeBudgetCard === 'funding'}
+          icon={<DollarSign size={18} />}
           label="Aid & Income"
           value={formatCAD(totals.totalFunding)}
           tone="green"
@@ -1192,6 +1191,7 @@ function PlannerControls({
         />
         <SummaryToggle
           active={tab === 'budget' && activeBudgetCard === 'expenses'}
+          icon={<Wallet size={18} />}
           label="My Expenses"
           value={formatCAD(totals.myShareExpenses)}
           tone="orange"
@@ -1529,7 +1529,12 @@ function HouseholdSplitSummaryCard({
       onClick={onClick}
     >
       <span className="flex items-center justify-between gap-3">
-        <span className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Household Split</span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-otu-orange dark:bg-orange-950/40">
+            <House size={18} />
+          </span>
+          <span className="truncate text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Household Split</span>
+        </span>
         <span className={`rounded-full px-2 py-1 text-[11px] font-black ${active ? 'bg-orange-100 text-otu-orange dark:bg-orange-950/40' : 'bg-slate-100 text-slate-500 dark:bg-slate-800'}`}>
           {active ? 'Active' : 'View'}
         </span>
@@ -1634,12 +1639,14 @@ function RowPresetControls({
 
 function SummaryToggle({
   active,
+  icon,
   label,
   onClick,
   tone,
   value,
 }: {
   active: boolean;
+  icon: ReactNode;
   label: string;
   onClick: () => void;
   tone: 'blue' | 'green' | 'orange' | 'red';
@@ -1662,7 +1669,12 @@ function SummaryToggle({
       onClick={onClick}
     >
       <span className="flex items-center justify-between gap-3">
-        <span className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 ${toneClass} dark:bg-slate-800`}>
+            {icon}
+          </span>
+          <span className="truncate text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</span>
+        </span>
         <span className={`rounded-full px-2 py-1 text-[11px] font-black ${active ? 'bg-orange-100 text-otu-orange dark:bg-orange-950/40' : 'bg-slate-100 text-slate-500 dark:bg-slate-800'}`}>
           {active ? 'Active' : 'View'}
         </span>
@@ -2792,6 +2804,7 @@ function OnboardingWizard({
   const [householdCount, setHouseholdCount] = useState(Math.max(1, state.households.length || 2));
   const [programSearch, setProgramSearch] = useState('');
   const [programCategory, setProgramCategory] = useState('All');
+  const contentRef = useRef<HTMLElement | null>(null);
 
   const programCategories = useMemo(
     () => ['All', ...Array.from(new Set(Object.values(config.programs).map((preset) => preset.category || 'Other'))).sort()],
@@ -2815,6 +2828,13 @@ function OnboardingWizard({
     if (!config.mealPlans[mealPlan]) setMealPlan(config.mealPlans.none ? 'none' : Object.keys(config.mealPlans)[0] ?? 'none');
     if (!programCategories.includes(programCategory)) setProgramCategory('All');
   }, [config, livingSituation, mealPlan, program, programCategories, programCategory]);
+
+  useEffect(() => {
+    contentRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    if (window.innerWidth < 1024) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [step]);
 
   const finish = () => {
     const firstYear = createInitialYearBudget(1, state.tuitionInflationRate, program, livingSituation, config, mealPlan, monthlyGroceries);
@@ -3061,10 +3081,10 @@ function OnboardingWizard({
   ];
 
   return (
-    <main className="min-h-screen bg-slate-100 p-4 dark:bg-slate-950 md:p-6">
-      <div className="mx-auto w-full max-w-7xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950">
-        <div className="grid min-h-[calc(100vh-2rem)] overflow-hidden lg:grid-cols-[320px_1fr] md:min-h-[calc(100vh-3rem)]">
-          <aside className="bg-otu-blue p-6 text-white">
+    <main className="min-h-dvh bg-slate-100 p-3 dark:bg-slate-950 md:p-4">
+      <div className="mx-auto flex w-full max-w-7xl overflow-visible rounded-lg border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950 lg:max-h-[calc(100dvh-2rem)] lg:overflow-hidden">
+        <div className="grid min-h-0 flex-1 overflow-visible lg:grid-cols-[300px_1fr] lg:overflow-hidden xl:grid-cols-[320px_1fr]">
+          <aside className="overflow-y-auto bg-otu-blue p-4 text-white lg:p-5 xl:p-6">
             <div className="flex items-center justify-between">
               <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-otu-orange shadow-lg">
                 <GraduationCap size={26} />
@@ -3078,12 +3098,12 @@ function OnboardingWizard({
                 <X size={16} />
               </button>
             </div>
-            <p className="mt-8 text-xs font-black uppercase tracking-[0.22em] text-otu-sky">Ontario Tech Setup</p>
-            <h2 className="mt-3 text-3xl font-black leading-tight">Build a strong first draft in minutes.</h2>
-            <p className="mt-4 text-sm leading-6 text-blue-100">
+            <p className="mt-6 text-xs font-black uppercase tracking-[0.22em] text-otu-sky">Ontario Tech Setup</p>
+            <h2 className="mt-2 text-2xl font-black leading-tight xl:text-3xl">Build a strong first draft in minutes.</h2>
+            <p className="mt-3 text-sm leading-6 text-blue-100">
               Answer a few practical questions and the planner will assemble tuition, housing, aid, savings, and family split defaults.
             </p>
-            <div className="mt-8 space-y-3">
+            <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
               {steps.map((wizardStep, index) => (
                 <button
                   key={wizardStep.title}
@@ -3109,20 +3129,20 @@ function OnboardingWizard({
             </div>
           </aside>
 
-          <section className="overflow-y-auto bg-slate-50 p-5 dark:bg-slate-950 md:p-7">
-            <div className="mb-6 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+          <section ref={contentRef} className="min-h-0 overflow-visible bg-slate-50 p-4 dark:bg-slate-950 md:p-5 lg:overflow-y-auto xl:p-7">
+            <div className="mb-4 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
               <div
                 className="h-full rounded-full bg-otu-orange transition-all"
                 style={{ width: `${((step + 1) / steps.length) * 100}%` }}
               />
             </div>
 
-            <div className="grid gap-6 xl:grid-cols-[1fr_280px]">
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_280px]">
               <div>
                 <p className="text-xs font-black uppercase tracking-wide text-otu-orange">{steps[step].eyebrow}</p>
-                <h2 className="mt-2 text-3xl font-black tracking-normal text-slate-950 dark:text-white">{steps[step].title}</h2>
+                <h2 className="mt-2 text-2xl font-black tracking-normal text-slate-950 dark:text-white md:text-3xl">{steps[step].title}</h2>
                 <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">{steps[step].subtitle}</p>
-                <div className="mt-6">{steps[step].body}</div>
+                <div className="mt-5">{steps[step].body}</div>
               </div>
 
               <aside className="h-fit rounded-lg border border-slate-200 bg-white p-4 shadow-soft dark:border-slate-800 dark:bg-slate-900">
@@ -3154,7 +3174,7 @@ function OnboardingWizard({
               </aside>
             </div>
 
-            <div className="mt-8 flex flex-col gap-3 border-t border-slate-200 pt-5 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
+            <div className="sticky bottom-0 mt-6 flex flex-col gap-3 border-t border-slate-200 bg-slate-50 pt-4 dark:border-slate-800 dark:bg-slate-950 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-sm font-bold text-slate-500">
                 Step {step + 1} of {steps.length}
               </span>
