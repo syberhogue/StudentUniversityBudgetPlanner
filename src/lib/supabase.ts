@@ -92,7 +92,7 @@ export const signInWithPassword = async (email: string, password: string) => {
 
 export const signUpWithPassword = async (email: string, password: string, fullName: string) => {
   if (!supabase) throw new Error('Supabase is not configured. Sandbox Mode is active.');
-  const { error } = await supabase.auth.signUp({
+  const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: {
@@ -101,6 +101,16 @@ export const signUpWithPassword = async (email: string, password: string, fullNa
     },
   });
   if (error) throw error;
+  if (data.session && data.user) {
+    const { error: profileError } = await supabase.from('profiles').upsert({
+      id: data.user.id,
+      email: data.user.email ?? email,
+      full_name: fullName.trim() || null,
+      updated_at: new Date().toISOString(),
+    });
+    if (profileError) throw profileError;
+  }
+  return { hasSession: Boolean(data.session), email: data.user?.email ?? email };
 };
 
 export const sendMagicLink = async (email: string) => {

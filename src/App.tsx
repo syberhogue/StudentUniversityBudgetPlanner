@@ -8,6 +8,7 @@ import {
   Home,
   Landmark,
   Link,
+  LogIn,
   LogOut,
   Moon,
   PiggyBank,
@@ -52,6 +53,7 @@ import {
 import { loadLocalPlan, loadLocalShare, saveLocalPlan, saveLocalShare } from './lib/storage';
 import {
   createRemoteShare,
+  getCurrentSession,
   getCurrentUserIsAdmin,
   isSupabaseConfigured,
   loadCurrentUserProfile,
@@ -457,7 +459,7 @@ function AuthPage({ navigate }: { navigate: (path: string) => void }) {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const submit = async (event: React.FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setStatus('');
@@ -471,8 +473,12 @@ function AuthPage({ navigate }: { navigate: (path: string) => void }) {
         await signInWithPassword(email, password);
         navigate('/app');
       } else if (mode === 'signup') {
-        await signUpWithPassword(email, password, fullName);
-        setStatus('Check your email to confirm the account, then return to sign in.');
+        const result = await signUpWithPassword(email, password, fullName);
+        if (result.hasSession) {
+          navigate('/app');
+        } else {
+          setStatus('Check your email to confirm the account, then return to sign in.');
+        }
       } else {
         await sendMagicLink(email);
         setStatus('Magic link sent. Check your inbox.');
@@ -574,6 +580,12 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
     selectedProgramName,
     state.academicYear || 'Academic Year',
   ].join(' - ');
+  const isRemoteSignedIn = isSupabaseConfigured && Boolean(currentUserEmail);
+  const storageStatus = !isSupabaseConfigured
+    ? 'Sandbox Mode: local autosave only'
+    : isRemoteSignedIn
+      ? `Signed in as ${currentUserEmail}: saving to Supabase`
+      : 'Local draft only: sign in to save to Supabase';
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode);
@@ -582,22 +594,30 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
   useEffect(() => {
     saveLocalPlan(state);
     if (!remoteReady) return undefined;
-    const timer = window.setTimeout(() => void saveRemotePlanSnapshot(state).catch(() => undefined), 750);
+    if (!isRemoteSignedIn) return undefined;
+    const timer = window.setTimeout(() => {
+      void saveRemotePlanSnapshot(state).then((planId) => {
+        if (planId) setSaveError('');
+      }).catch((error) => {
+        setSaveError(error instanceof Error ? error.message : 'Autosave could not write to Supabase.');
+      });
+    }, 750);
     return () => window.clearTimeout(timer);
-  }, [remoteReady, state]);
+  }, [isRemoteSignedIn, remoteReady, state]);
 
   useEffect(() => {
     let cancelled = false;
 
     const initializeRemoteState = async () => {
       const config = await loadRemotePlannerConfig();
-      const remotePlan = isSupabaseConfigured ? await loadRemotePlanSnapshot() : null;
-      const profile = isSupabaseConfigured ? await loadCurrentUserProfile() : null;
-      const admin = await getCurrentUserIsAdmin();
+      const session = isSupabaseConfigured ? await getCurrentSession() : null;
+      const remotePlan = session ? await loadRemotePlanSnapshot() : null;
+      const profile = session ? await loadCurrentUserProfile() : null;
+      const admin = session ? await getCurrentUserIsAdmin() : false;
 
       if (cancelled) return;
       setIsAdmin(admin);
-      setCurrentUserEmail(profile?.email ?? '');
+      setCurrentUserEmail(profile?.email ?? session?.user.email ?? '');
       setState((previous) => {
         const basePlan = remotePlan ?? previous;
         const firstYearBudget = basePlan.yearlyBudgets[1];
@@ -614,6 +634,9 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
           config,
         };
       });
+      if (isSupabaseConfigured && !session) {
+        setSaveError('You are using a local draft. Sign in before saving if you want rows written to Supabase.');
+      }
       setRemoteReady(true);
     };
 
@@ -744,6 +767,11 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
   const saveNow = async () => {
     saveLocalPlan(state);
     try {
+      if (isSupabaseConfigured && !isRemoteSignedIn) {
+        setSaveError('Sign in to save this plan to your Supabase profile. This draft is currently saved locally only.');
+        setSaved(false);
+        return;
+      }
       const remotePlanId = await saveRemotePlanSnapshot(state);
       if (isSupabaseConfigured && !remotePlanId) {
         setSaveError('Sign in to save this plan to your Supabase profile.');
@@ -801,6 +829,8 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
 
   const handleSignOut = async () => {
     await signOut();
+    setCurrentUserEmail('');
+    setIsAdmin(false);
     navigate('/');
   };
 
@@ -845,7 +875,7 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
             </div>
             <div>
               <h1 className="text-xl font-black">Ontario Tech Student Financial Planner</h1>
-              <p className="text-xs font-semibold text-blue-100">{isSupabaseConfigured ? 'Supabase-ready account mode' : 'Sandbox Mode with local autosave'}</p>
+              <p className="text-xs font-semibold text-blue-100">{storageStatus}</p>
             </div>
           </div>
           <nav className="flex flex-wrap gap-1 rounded-lg bg-otu-navy p-1">
@@ -874,9 +904,15 @@ function DashboardPage({ navigate }: { navigate: (path: string) => void }) {
             <button type="button" className="secondary-button border-white/20 bg-white/10 text-white hover:bg-white/20" onClick={() => setShowProfile(true)}>
               <UserRound size={16} /> Profile
             </button>
-            <button type="button" className="secondary-button border-white/20 bg-white/10 text-white hover:bg-white/20" onClick={() => void handleSignOut()}>
-              <LogOut size={16} /> Sign out
-            </button>
+            {isRemoteSignedIn ? (
+              <button type="button" className="secondary-button border-white/20 bg-white/10 text-white hover:bg-white/20" onClick={() => void handleSignOut()}>
+                <LogOut size={16} /> Sign out
+              </button>
+            ) : (
+              <button type="button" className="secondary-button border-white/20 bg-white/10 text-white hover:bg-white/20" onClick={() => navigate('/auth')}>
+                <LogIn size={16} /> Sign in
+              </button>
+            )}
           </div>
         </div>
       </header>
